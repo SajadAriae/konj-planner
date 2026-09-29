@@ -27,21 +27,341 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Check Flutter
-        run: flutter --version
-
       - name: Create Android project
         run: |
-          if [ ! -d "android" ]; then
-            flutter create \
-              --platforms=android \
-              --org com.konj \
-              --project-name planner \
-              .
-          fi
+          mkdir -p /tmp/konj_keep
+          cp -r lib pubspec.yaml logo.png /tmp/konj_keep/
+
+          flutter create \
+            --project-name planner \
+            --org com.konj \
+            --platforms android \
+            .
+
+          cp /tmp/konj_keep/pubspec.yaml pubspec.yaml
+          cp -r /tmp/konj_keep/lib .
+          cp /tmp/konj_keep/logo.png .
+
+      - name: Configure Android
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import shutil
+
+          app_gradle = Path("android/app/build.gradle.kts")
+          gradle = app_gradle.read_text(encoding="utf-8")
+
+          # Enable core library desugaring
+          if "isCoreLibraryDesugaringEnabled" in gradle:
+              gradle = re.sub(
+                  r"isCoreLibraryDesugaringEnabled\s*=\s*(true|false)",
+                  "isCoreLibraryDesugaringEnabled = true",
+                  gradle
+              )
+          else:
+              gradle = gradle.replace(
+                  "compileOptions {",
+                  """compileOptions {
+            isCoreLibraryDesugaringEnabled = true""",
+                  1
+              )
+
+          # Java 17
+          gradle = re.sub(
+              r"sourceCompatibility\s*=\s*JavaVersion\.[A-Z0-9_]+",
+              "sourceCompatibility = JavaVersion.VERSION_17",
+              gradle
+          )
+
+          gradle = re.sub(
+              r"targetCompatibility\s*=\s*JavaVersion\.[A-Z0-9_]+",
+              "targetCompatibility = JavaVersion.VERSION_17",
+              gradle
+          )
+
+          # Make sure desugar dependency exists
+          if "desugar_jdk_libs" not in gradle:
+              if "dependencies {" in gradle:
+                  gradle = gradle.replace(
+                      "dependencies {",
+                      """dependencies {
+            coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")""",
+                      1
+                  )
+              else:
+                  gradle += """
+          
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+          }
+          """
+
+          app_gradle.write_text(gradle, encoding="utf-8")
+
+          # Manifest
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          m = manifest.read_text(encoding="utf-8")
+
+          m = m.replace(
+              'android:label="planner"',
+              'android:label="Konj Planner"'
+          )
+
+          m = m.replace(
+              'android:label="@string/app_name"',
+              'android:label="Konj Planner"'
+          )
+
+          permissions = """
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+          """
+
+          if "android.permission.POST_NOTIFICATIONS" not in m:
+              m = re.sub(
+                  r"(<manifest[^>]*>)",
+                  r"\1" + permissions,
+                  m,
+                  count=1
+              )
+
+          # Logo
+          res = Path("android/app/src/main/res")
+          drawable = res / "drawable"
+          drawable.mkdir(parents=True, exist_ok=True)
+
+          shutil.copy2(
+              "logo.png",
+              drawable / "konj_logo.png"
+          )
+
+          m = m.replace(
+              "@mipmap/ic_launcher_round",
+              "@drawable/konj_logo"
+          )
+          m = m.replace(
+              "@mipmap/ic_launcher",
+              "@drawable/konj_logo"
+          )
+
+          manifest.write_text(m, encoding="utf-8")
+
+          print("===== FINAL app/build.gradle.kts =====")
+          print(app_gradle.read_text(encoding="utf-8"))
+          PY
+
+      - name: Add Konj Android Widget
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("android/app/src/main")
+          pkg = root / "kotlin/com/konj/planner"
+          res = root / "res"
+
+          pkg.mkdir(parents=True, exist_ok=True)
+          (res / "layout").mkdir(parents=True, exist_ok=True)
+          (res / "xml").mkdir(parents=True, exist_ok=True)
+          (res / "drawable").mkdir(parents=True, exist_ok=True)
+
+          provider = """package com.konj.planner
+
+          import android.appwidget.AppWidgetManager
+          import android.content.Context
+          import android.content.SharedPreferences
+          import android.widget.RemoteViews
+          import es.antonborri.home_widget.HomeWidgetProvider
+
+          class KonjWidgetProvider : HomeWidgetProvider() {
+              override fun onUpdate(
+                  context: Context,
+                  appWidgetManager: AppWidgetManager,
+                  appWidgetIds: IntArray,
+                  widgetData: SharedPreferences
+              ) {
+                  appWidgetIds.forEach { widgetId ->
+                      val tasks = widgetData.getInt("today_tasks", 0)
+                      val done = widgetData.getInt("done_today", 0)
+                      val goals = widgetData.getInt("goal_count", 0)
+                      val avg = widgetData.getInt("goal_avg", 0)
+                      val next = widgetData.getString(
+                          "next_task",
+                          "برای امروز کاری نداری 🎉"
+                      ) ?: ""
+
+                      val views = RemoteViews(
+                          context.packageName,
+                          R.layout.konj_widget
+                      ).apply {
+                          setTextViewText(
+                              R.id.widget_tasks,
+                              "کارهای امروز: $tasks"
+                          )
+                          setTextViewText(
+                              R.id.widget_done,
+                              "انجام‌شده: $done"
+                          )
+                          setTextViewText(
+                              R.id.widget_goals,
+                              "اهداف: $goals • میانگین پیشرفت: $avg٪"
+                          )
+                          setTextViewText(
+                              R.id.widget_next,
+                              next
+                          )
+                      }
+
+                      appWidgetManager.updateAppWidget(
+                          widgetId,
+                          views
+                      )
+                  }
+              }
+          }
+          """
+
+          (pkg / "KonjWidgetProvider.kt").write_text(
+              provider,
+              encoding="utf-8"
+          )
+
+          layout = """<?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:padding="14dp"
+              android:background="@drawable/konj_widget_bg">
+
+              <TextView
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="Konj Planner"
+                  android:textStyle="bold"
+                  android:textSize="18sp"
+                  android:textColor="#202020"/>
+
+              <TextView
+                  android:id="@+id/widget_tasks"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="7dp"
+                  android:text="کارهای امروز: 0"
+                  android:textSize="14sp"
+                  android:textColor="#202020"/>
+
+              <TextView
+                  android:id="@+id/widget_done"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="انجام‌شده: 0"
+                  android:textSize="14sp"
+                  android:textColor="#202020"/>
+
+              <TextView
+                  android:id="@+id/widget_goals"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="2dp"
+                  android:text="اهداف: 0 • میانگین پیشرفت: 0٪"
+                  android:textSize="13sp"
+                  android:textColor="#505050"/>
+
+              <TextView
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="8dp"
+                  android:text="کار بعدی"
+                  android:textStyle="bold"
+                  android:textSize="12sp"
+                  android:textColor="#505050"/>
+
+              <TextView
+                  android:id="@+id/widget_next"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:maxLines="2"
+                  android:text="برای امروز کاری نداری 🎉"
+                  android:textSize="14sp"
+                  android:textColor="#202020"/>
+          </LinearLayout>
+          """
+
+          (res / "layout/konj_widget.xml").write_text(
+              layout,
+              encoding="utf-8"
+          )
+
+          bg = """<?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="#FFFFFF"/>
+              <corners android:radius="20dp"/>
+              <stroke
+                  android:width="1dp"
+                  android:color="#22000000"/>
+          </shape>
+          """
+
+          (res / "drawable/konj_widget_bg.xml").write_text(
+              bg,
+              encoding="utf-8"
+          )
+
+          info = """<?xml version="1.0" encoding="utf-8"?>
+          <appwidget-provider
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:minWidth="250dp"
+              android:minHeight="120dp"
+              android:targetCellWidth="4"
+              android:targetCellHeight="2"
+              android:updatePeriodMillis="1800000"
+              android:initialLayout="@layout/konj_widget"
+              android:resizeMode="horizontal|vertical"
+              android:widgetCategory="home_screen"/>
+          """
+
+          (res / "xml/konj_widget_info.xml").write_text(
+              info,
+              encoding="utf-8"
+          )
+
+          manifest = root / "AndroidManifest.xml"
+          m = manifest.read_text(encoding="utf-8")
+
+          receiver = """
+              <receiver
+                  android:name=".KonjWidgetProvider"
+                  android:exported="true">
+                  <intent-filter>
+                      <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+                  </intent-filter>
+
+                  <meta-data
+                      android:name="android.appwidget.provider"
+                      android:resource="@xml/konj_widget_info"/>
+              </receiver>
+          """
+
+          if "KonjWidgetProvider" not in m:
+              m = m.replace(
+                  "</application>",
+                  receiver + "\n</application>"
+              )
+
+          manifest.write_text(m, encoding="utf-8")
+          PY
 
       - name: Get dependencies
         run: flutter pub get
+
+      - name: Verify desugaring configuration
+        run: |
+          echo "Checking Android desugaring configuration..."
+          grep -n "CoreLibraryDesugaring\|desugar_jdk_libs" \
+            android/app/build.gradle.kts
 
       - name: Build APK
         run: flutter build apk --release
