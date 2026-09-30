@@ -1,0 +1,92 @@
+name: Konj Planner Android Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Konj Planner APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create Android project
+        run: |
+          flutter create \
+            --project-name planner \
+            --org com.konj \
+            --platforms android \
+            .
+
+      - name: Restore project files
+        run: |
+          echo "Project files:"
+          ls -la
+          echo "Dart source:"
+          ls -la lib
+
+      - name: Configure Android
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("android/app/build.gradle.kts")
+          s = p.read_text()
+
+          if "isCoreLibraryDesugaringEnabled" not in s:
+              s = s.replace(
+                  "compileOptions {",
+                  """compileOptions {
+                      isCoreLibraryDesugaringEnabled = true""",
+                  1
+              )
+          else:
+              s = re.sub(
+                  r"isCoreLibraryDesugaringEnabled\s*=\s*(true|false)",
+                  "isCoreLibraryDesugaringEnabled = true",
+                  s
+              )
+
+          if "desugar_jdk_libs" not in s:
+              s = s.replace(
+                  "dependencies {",
+                  """dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")""",
+                  1
+              )
+
+          p.write_text(s)
+
+          print("Android configuration completed.")
+          print(p.read_text())
+          PY
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: konj-planner-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
