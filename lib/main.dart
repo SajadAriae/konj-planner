@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:home_widget/home_widget.dart';
 import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
-import 'package:home_widget/home_widget.dart';
 
 // ───────────────────────── تنظیمات و ثابت‌ها ─────────────────────────
 const kVer = 4; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
@@ -285,60 +285,6 @@ class _JPickS extends State<_JPick> {
   }
 }
 
-// ───────────────────────── ویجت صفحه‌ی اصلی اندروید ─────────────────────────
-Future<void> syncHomeWidget() async {
-  try {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-
-    final todayTasks = D.tasks.where((k) {
-      if (k['done'] == true) return false;
-      final r = k['r'];
-      if (r == null) return true;
-      try {
-        final d = DateTime.parse(r);
-        return d.year == today.year && d.month == today.month && d.day == today.day;
-      } catch (_) {
-        return true;
-      }
-    }).toList();
-
-    final doneToday = D.tasks.where((k) {
-      if (k['done'] != true) return false;
-      final r = k['r'];
-      if (r == null) return false;
-      try {
-        final d = DateTime.parse(r);
-        return d.year == today.year && d.month == today.month && d.day == today.day;
-      } catch (_) {
-        return false;
-      }
-    }).length;
-
-    String nextTask = 'برای امروز کاری نداری 🎉';
-    if (todayTasks.isNotEmpty) {
-      todayTasks.sort((a, b) => ((a['r'] ?? '') as String).compareTo((b['r'] ?? '') as String));
-      nextTask = (todayTasks.first['t'] ?? '').toString();
-      if (nextTask.length > 34) nextTask = '${nextTask.substring(0, 34)}…';
-    }
-
-    final goalCount = D.goals.length;
-    final goalAvg = goalCount == 0
-        ? 0
-        : (D.goals.map((g) => (g['progress'] as int? ?? 0)).reduce((a, b) => a + b) / goalCount).round();
-
-    await Future.wait([
-      HomeWidget.saveWidgetData<int>('today_tasks', todayTasks.length),
-      HomeWidget.saveWidgetData<int>('done_today', doneToday),
-      HomeWidget.saveWidgetData<int>('goal_count', goalCount),
-      HomeWidget.saveWidgetData<int>('goal_avg', goalAvg),
-      HomeWidget.saveWidgetData<String>('next_task', nextTask),
-    ]);
-
-    await HomeWidget.updateWidget(androidName: 'KonjWidgetProvider');
-  } catch (_) {}
-}
-
 // ───────────────────────── داده‌ها ─────────────────────────
 class D {
   static List<Map> tasks = [], events = [], txs = [], goals = [];
@@ -439,6 +385,28 @@ class D {
       return false;
     }
   }
+}
+
+// ───────────────────────── ویجت صفحه اصلی ─────────────────────────
+Future<void> syncHomeWidget() async {
+  try {
+    final now = DateTime.now();
+    final open = D.tasks.where((k) => k['done'] != true).length;
+    final overdue = D.tasks.where((k) {
+      if (k['done'] == true || k['r'] == null) return false;
+      try { return DateTime.parse(k['r']).isBefore(now); } catch (_) { return false; }
+    }).length;
+    final goals = List<Map>.from(D.goals)
+      ..sort((a, b) => (DateTime.tryParse(a['deadline'] ?? '') ?? DateTime(9999))
+          .compareTo(DateTime.tryParse(b['deadline'] ?? '') ?? DateTime(9999)));
+    final goal = goals.isEmpty ? null : goals.first;
+    await HomeWidget.saveWidgetData<String>('openTasks', '$open');
+    await HomeWidget.saveWidgetData<String>('overdueTasks', '$overdue');
+    await HomeWidget.saveWidgetData<String>('goalTitle', goal?['t']?.toString() ?? 'هنوز هدفی ثبت نشده');
+    await HomeWidget.saveWidgetData<String>('goalProgress', '${goal?['progress'] ?? 0}');
+    await HomeWidget.saveWidgetData<String>('today', fd(ds(now)));
+    await HomeWidget.updateWidget(androidName: 'KonjPlannerWidgetProvider');
+  } catch (_) {}
 }
 
 // ───────────────────────── اعلان‌ها ─────────────────────────
@@ -569,49 +537,29 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   tzd.initializeTimeZones();
   tz.setLocalLocation(tz.getLocation('Asia/Tehran'));
-
   prefs = await SharedPreferences.getInstance();
   jal = prefs.getBool('jal') ?? true;
   D.load();
 
-  // اول خود رابط برنامه را نمایش می‌دهیم؛ سرویس‌های جانبی نباید مانع بالا آمدن برنامه شوند.
-  runApp(const App());
+  await notif.initialize(
+    const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    ),
+  );
 
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    _initBackgroundServices();
-  });
-}
-
-Future<void> _initBackgroundServices() async {
-  // اعلان‌ها، مجوزها و Widget در پس‌زمینه راه‌اندازی می‌شوند تا در صورت خطا
-  // یا تأخیر سرویس‌های اندروید، صفحه اصلی برنامه سیاه یا متوقف نشود.
-  try {
-    await notif.initialize(
-      const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-      ),
-    );
-  } catch (_) {}
-
+  // هر بار نصب/آپدیت یا اجرای برنامه، هر دو مجوز را بررسی می‌کنیم.
   try {
     final a = notif.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     await a?.requestNotificationsPermission();
-  } catch (_) {}
-
-  try {
-    final a = notif.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     await a?.requestExactAlarmsPermission();
   } catch (_) {}
 
-  try {
+  runApp(const App());
+  WidgetsBinding.instance.addPostFrameCallback((_) async {
     await scheduleAll();
-  } catch (_) {}
-
-  try {
     await syncHomeWidget();
-  } catch (_) {}
+  });
 }
-
 
 class App extends StatelessWidget {
   const App({super.key});
@@ -1266,43 +1214,31 @@ class _H extends State<Home> {
   }
 
   Widget tasks() {
-    final now = DateTime.now();
-    final today = ds(now);
-    final nowIso = now.toIso8601String();
+    final now = DateTime.now(), t = ds(now), nowIso = now.toIso8601String();
     final wk = ds(now.subtract(Duration(days: (now.weekday + 1) % 7)));
     final mo = monthStart(now);
-    final ev = D.events.where((e) => e['wd'] == now.weekday && today.compareTo(e['from']) >= 0 && today.compareTo(e['to']) <= 0).toList()
+    final ev = D.events.where((e) => e['wd'] == now.weekday && t.compareTo(e['from']) >= 0 && t.compareTo(e['to']) <= 0).toList()
       ..sort(byStart);
-
-    bool overdue(Map k) {
-      if (k['done'] == true) return false;
-      final r = k['r'] as String?;
-      return r != null && r.compareTo(nowIso) < 0;
+    final overdue = D.tasks.where((k) {
+      if (k['done'] == true || k['r'] == null) return false;
+      try { return DateTime.parse(k['r']).isBefore(now); } catch (_) { return false; }
+    }).toList();
+    final needs = D.tasks.where((k) => k['done'] != true && !overdue.contains(k)).toList();
+    final done = D.tasks.where((k) => k['done'] == true).toList();
+    int taskSort(Map a, Map b) {
+      final s = (b['star'] == true ? 1 : 0) - (a['star'] == true ? 1 : 0);
+      return s != 0 ? s : (a['id'] as int).compareTo(b['id'] as int);
     }
-
-    final need = D.tasks.where((k) => k['done'] != true && !overdue(k)).toList()
-      ..sort((a, b) {
-        final s = (b['star'] == true ? 1 : 0) - (a['star'] == true ? 1 : 0);
-        if (s != 0) return s;
-        final ar = (a['r'] as String?) ?? '9999-99-99T99:99:99';
-        final br = (b['r'] as String?) ?? '9999-99-99T99:99:99';
-        final r = ar.compareTo(br);
-        return r != 0 ? r : (a['id'] as int).compareTo(b['id'] as int);
-      });
-
-    final late = D.tasks.where(overdue).toList()
-      ..sort((a, b) => ((a['r'] as String?) ?? '').compareTo((b['r'] as String?) ?? ''));
-
-    final done = D.tasks.where((k) => k['done'] == true).toList()
-      ..sort((a, b) => ((b['doneAt'] as String?) ?? '').compareTo((a['doneAt'] as String?) ?? ''));
+    needs.sort(taskSort);
+    overdue.sort((a, b) => ((a['r'] ?? '') as String).compareTo((b['r'] ?? '') as String));
+    done.sort((a, b) => ((b['doneAt'] ?? '') as String).compareTo((a['doneAt'] ?? '') as String));
 
     Widget tile(Map k) {
       final d = k['done'] == true;
-      final subs = (k['subs'] as List? ?? const []).cast<Map>();
+      final subs = (k['subs'] as List).cast<Map>();
       final sd = subs.where((s) => s['done'] == true).length;
-      final lateNow = overdue(k);
       final info = [
-        if (k['r'] != null) '${lateNow ? '⚠️' : '⏰'} ${fd(k['r'])}  ${(k['r'] as String).substring(11, 16)}',
+        if (k['r'] != null) '⏰ ${fd(k['r'])}  ${(k['r'] as String).length >= 16 ? (k['r'] as String).substring(11, 16) : ''}',
         if (subs.isNotEmpty) 'زیرمجموعه: $sd از ${subs.length}',
       ].join('   •   ');
       return Dismissible(
@@ -1314,7 +1250,7 @@ class _H extends State<Home> {
             ListTile(
                 leading: Checkbox(value: d, onChanged: (_) => toggle(k)),
                 title: Text(k['t'], style: d ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
-                subtitle: info.isEmpty ? null : Text(info, style: lateNow ? TextStyle(color: Theme.of(context).colorScheme.error) : null),
+                subtitle: info.isEmpty ? null : Text(info),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   IconButton(
                       tooltip: 'مهم',
@@ -1331,15 +1267,16 @@ class _H extends State<Home> {
                             PopupMenuItem(value: 'd', child: Text('حذف')),
                           ]),
                 ])),
-            for (final sub in subs)
+            for (final s in subs)
               CheckboxListTile(
                   dense: true,
                   controlAffinity: ListTileControlAffinity.leading,
                   contentPadding: const EdgeInsets.only(right: 40, left: 16),
-                  value: sub['done'] == true,
-                  title: Text(sub['t'], style: sub['done'] == true ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
+                  value: s['done'] == true,
+                  title: Text(s['t'],
+                      style: s['done'] == true ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
                   onChanged: (v) {
-                    sub['done'] = v == true;
+                    s['done'] = v == true;
                     upd();
                   }),
           ])));
@@ -1347,41 +1284,28 @@ class _H extends State<Home> {
 
     Widget rep(String label, String from) {
       final dn = D.tasks.where((k) => k['done'] == true && ((k['doneAt'] ?? '') as String).compareTo(from) >= 0).length;
-      final od = D.tasks.where((k) {
+      final od = overdue.where((k) {
         final r = k['r'] as String?;
-        return k['done'] != true && r != null && r.compareTo(nowIso) < 0 && r.substring(0, 10).compareTo(from) >= 0;
+        return r != null && r.substring(0, 10).compareTo(from) >= 0;
       }).length;
-      final todo = D.tasks.where((k) => k['done'] != true && !overdue(k)).length;
-      return ListTile(dense: true, title: Text(label), subtitle: Text('نیاز به انجام $todo'), trailing: Text('انجام‌شده $dn   |   عقب‌افتاده $od'));
+      return ListTile(dense: true, title: Text(label), trailing: Text('انجام‌شده $dn   |   عقب‌افتاده $od'));
     }
-
-    Widget section(String title, IconData icon, List<Map> list, {Color? color, String? empty}) => Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 14, bottom: 6),
-              child: Row(children: [
-                Icon(icon, size: 20, color: color),
-                const SizedBox(width: 7),
-                Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: color)),
-                const SizedBox(width: 6),
-                Text('(${list.length})', style: TextStyle(color: Theme.of(context).colorScheme.outline)),
-              ]),
-            ),
-            if (list.isEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(empty ?? 'موردی نیست.')),
-            for (final k in list) tile(k),
-          ],
-        );
 
     return ListView(padding: const EdgeInsets.all(12), children: [
       for (final e in ev)
         Card(child: ListTile(leading: const Icon(Icons.schedule), title: Text(e['t']), subtitle: Text('${hm(e['s'])} – ${hm(e['e'])}'))),
-      section('نیاز به انجام', Icons.radio_button_unchecked, need, color: Theme.of(context).colorScheme.primary, empty: 'فعلاً کاری برای انجام نداری. با دکمه + یک کار ثبت کن.'),
-      section('عقب‌افتاده', Icons.warning_amber_rounded, late, color: Theme.of(context).colorScheme.error, empty: 'کار عقب‌افتاده‌ای نداری. عالیه!'),
-      section('انجام‌شده', Icons.check_circle_outline, done, color: Colors.green, empty: 'هنوز کاری را انجام‌شده ثبت نکردی.'),
+      const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('نیاز به انجام', style: TextStyle(fontWeight: FontWeight.bold))),
+      for (final k in needs) tile(k),
+      if (needs.isEmpty) const Text('کار جدیدی برای انجام نداری.'),
+      const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('عقب‌افتاده', style: TextStyle(fontWeight: FontWeight.bold))),
+      for (final k in overdue) tile(k),
+      if (overdue.isEmpty) const Text('کار عقب‌افتاده‌ای نداری.'),
+      const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('انجام‌شده', style: TextStyle(fontWeight: FontWeight.bold))),
+      for (final k in done) tile(k),
+      if (done.isEmpty) const Text('هنوز کاری انجام‌شده ثبت نشده.'),
       const Divider(height: 32),
       const Text('گزارش کارها', style: TextStyle(fontWeight: FontWeight.bold)),
-      Card(child: Column(children: [rep('امروز', today), rep('این هفته', wk), rep('این ماه', mo)])),
+      Card(child: Column(children: [rep('امروز', t), rep('این هفته', wk), rep('این ماه', mo)])),
       const SizedBox(height: 80),
     ]);
   }
@@ -1573,9 +1497,7 @@ class _H extends State<Home> {
   }
 
   Future<void> txSheet([Map? o]) async {
-    final amt = TextEditingController(text: o != null ? n(o['a']) : ''),
-        ttl = TextEditingController(text: o?['t'] ?? ''),
-        note = TextEditingController(text: o?['note'] ?? '');
+    final amt = TextEditingController(text: o != null ? n(o['a']) : ''), ttl = TextEditingController(text: o?['t'] ?? ''), note = TextEditingController(text: o?['note'] ?? '');
     var inc = o?['inc'] == true;
     var cat = (o?['c'] ?? 'سایر') as String;
     var date = o != null ? DateTime.parse(o['d']) : DateTime.now();
@@ -1589,16 +1511,7 @@ class _H extends State<Home> {
                   child: SingleChildScrollView(
                       child: Column(mainAxisSize: MainAxisSize.min, children: [
                     TextField(controller: ttl, decoration: const InputDecoration(labelText: 'عنوان')),
-                    TextField(
-                        controller: note,
-                        minLines: 2,
-                        maxLines: 4,
-                        decoration: const InputDecoration(
-                          labelText: 'یادداشت / توضیحات',
-                          hintText: 'مثلاً بابت چه چیزی، برای چه کسی یا چه توضیحی لازم است؟',
-                          alignLabelWithHint: true,
-                          prefixIcon: Icon(Icons.notes_outlined),
-                        )),
+                    TextField(controller: note, maxLines: 2, decoration: const InputDecoration(labelText: 'توضیحات / یادداشت', hintText: 'مثلاً بابت چه چیزی پرداخت شد؟')),
                     TextField(
                         controller: amt,
                         autofocus: o == null,
@@ -1635,14 +1548,7 @@ class _H extends State<Home> {
                         onPressed: () {
                           final v = int.tryParse(en(amt.text));
                           if (v == null || v == 0) return;
-                          final m = {
-                            'a': v,
-                            'inc': inc,
-                            'c': cat,
-                            't': ttl.text.trim(),
-                            'note': note.text.trim(),
-                            'd': ds(date),
-                          };
+                          final m = {'a': v, 'inc': inc, 'c': cat, 't': ttl.text.trim(), 'note': note.text.trim(), 'd': ds(date)};
                           if (o != null) {
                             o.addAll(m);
                           } else {
@@ -1690,8 +1596,7 @@ class _H extends State<Home> {
                 onTap: () => txSheet(x),
                 leading: Icon(x['inc'] == true ? Icons.south_west : Icons.north_east, color: x['inc'] == true ? Colors.green : Colors.red),
                 title: Text((x['t'] ?? '') != '' ? x['t'] : x['c']),
-                subtitle: Text(
-                    '${x['c']} • ${fd(x['d'])}${(x['note'] ?? '').toString().trim().isNotEmpty ? ' • ${x['note']}' : ''}'),
+                subtitle: Text('${x['c']} • ${fd(x['d'])}${(x['note'] ?? '').toString().isNotEmpty ? ' • ${x['note']}' : ''}'),
                 trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   Text(n(x['a'])),
                   IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => delTx(x)),
