@@ -12,8 +12,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # ----------------------------------------
-      # 1. Download repository
+      # 1. Checkout
       # ----------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,7 +29,7 @@ jobs:
           java-version: '17'
 
       # ----------------------------------------
-      # 3. Flutter
+      # 3. Flutter Stable
       # ----------------------------------------
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -37,16 +38,16 @@ jobs:
           cache: true
 
       # ----------------------------------------
-      # 4. Show versions
+      # 4. Versions
       # ----------------------------------------
-      - name: Show Flutter and Dart versions
+      - name: Show versions
         run: |
           flutter --version
           dart --version
           java -version
 
       # ----------------------------------------
-      # 5. Create Android platform
+      # 5. Create Android project
       # ----------------------------------------
       - name: Create Android platform
         run: |
@@ -57,27 +58,72 @@ jobs:
             .
 
       # ----------------------------------------
-      # 6. Configure Android Gradle
+      # 6. Configure Android
       # ----------------------------------------
-      - name: Configure Android Gradle
+      - name: Configure Android
         run: |
+          set -e
+
+          echo "========================================"
+          echo "Configuring Android Gradle"
+          echo "========================================"
+
+          # --------------------------------------
+          # Disable AGP 9 new DSL temporarily
+          # --------------------------------------
+
+          GRADLE_PROPERTIES="android/gradle.properties"
+
+          if [ -f "$GRADLE_PROPERTIES" ]; then
+            echo "android.newDsl=false" >> "$GRADLE_PROPERTIES"
+          else
+            mkdir -p android
+            echo "android.newDsl=false" > "$GRADLE_PROPERTIES"
+          fi
+
+          echo ""
+          echo "gradle.properties:"
+          cat "$GRADLE_PROPERTIES"
+
+          # --------------------------------------
+          # Configure app/build.gradle.kts
+          # --------------------------------------
+
           python3 <<'PY'
           from pathlib import Path
 
           path = Path("android/app/build.gradle.kts")
 
           if not path.exists():
-              raise Exception("android/app/build.gradle.kts was not found!")
+              raise SystemExit(
+                  "ERROR: android/app/build.gradle.kts does not exist"
+              )
 
           text = path.read_text(encoding="utf-8")
 
-          # ----------------------------------------
-          # Enable Java 17 + Core Library Desugaring
-          # ----------------------------------------
+          # --------------------------------------
+          # Remove any previous broken additions
+          # --------------------------------------
+
+          text = text.replace(
+              'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")',
+              ""
+          )
+
+          # --------------------------------------
+          # Add compileOptions inside android block
+          # --------------------------------------
 
           if "isCoreLibraryDesugaringEnabled = true" not in text:
 
-              compile_block = """
+              marker = "android {"
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ERROR: android { block not found"
+                  )
+
+              compile_options = """
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
@@ -85,90 +131,80 @@ jobs:
               }
               """
 
-              marker = "\n}\n\nflutter {"
+              text = text.replace(
+                  marker,
+                  marker + compile_options,
+                  1
+              )
 
-              if marker in text:
-                  text = text.replace(
-                      marker,
-                      compile_block + marker,
-                      1
-                  )
-              else:
-                  raise Exception(
-                      "Could not find android block in build.gradle.kts"
-                  )
+          # --------------------------------------
+          # Add dependency
+          # --------------------------------------
 
-          # ----------------------------------------
-          # Add desugaring dependency
-          # ----------------------------------------
-
-          dependency = (
-              'coreLibraryDesugaring('
-              '"com.android.tools:desugar_jdk_libs:2.1.4"'
-              ')'
-          )
+          dependency_block = """
+          
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+          }
+          """
 
           if "desugar_jdk_libs" not in text:
-
-              text += (
-                  "\n\n"
-                  "dependencies {\n"
-                  "    " + dependency + "\n"
-                  "}\n"
-              )
+              text += dependency_block
 
           path.write_text(text, encoding="utf-8")
 
-          # ----------------------------------------
-          # Verify configuration
-          # ----------------------------------------
+          # --------------------------------------
+          # Verify
+          # --------------------------------------
 
           print("========================================")
-          print("FINAL ANDROID GRADLE CONFIG")
+          print("FINAL build.gradle.kts")
           print("========================================")
           print(text)
           print("========================================")
 
           if "isCoreLibraryDesugaringEnabled = true" not in text:
-              raise Exception(
-                  "ERROR: Core Library Desugaring was NOT enabled!"
+              raise SystemExit(
+                  "ERROR: Desugaring was not enabled!"
               )
 
-          if "desugar_jdk_libs" not in text:
-              raise Exception(
-                  "ERROR: desugar_jdk_libs dependency was NOT added!"
+          if "desugar_jdk_libs:2.1.4" not in text:
+              raise SystemExit(
+                  "ERROR: desugar_jdk_libs dependency missing!"
               )
 
-          print("DESUGARING CONFIGURATION OK")
-          print("========================================")
+          print("ANDROID GRADLE CONFIGURATION OK")
           PY
 
       # ----------------------------------------
-      # 7. Get Flutter packages
+      # 7. Flutter dependencies
       # ----------------------------------------
       - name: Flutter Pub Get
         run: |
           flutter pub get
 
-  
-
       # ----------------------------------------
-      # 9. Build release APK
+      # 8. Build APK
       # ----------------------------------------
       - name: Build Release APK
         run: |
           flutter build apk --release
 
       # ----------------------------------------
-      # 10. Rename APK
+      # 9. Prepare APK
       # ----------------------------------------
       - name: Prepare APK
         run: |
           mkdir -p release
-          cp build/app/outputs/flutter-apk/app-release.apk release/Konj-Planner.apk
+
+          cp \
+            build/app/outputs/flutter-apk/app-release.apk \
+            release/Konj-Planner.apk
+
+          ls -lh release/Konj-Planner.apk
 
       # ----------------------------------------
-      # 11. Upload APK
+      # 10. Upload APK
       # ----------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
