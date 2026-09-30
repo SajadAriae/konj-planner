@@ -1,0 +1,17 @@
+KONJ PLANNER - FINAL RELEASE SETUP
+
+1) Upload/replace the project files in the existing GitHub repository.
+2) DO NOT upload any .jks, keystore.base64, or SECRETS files to the public repository.
+3) In GitHub: Settings -> Secrets and variables -> Actions -> New repository secret.
+4) Create these four secrets:
+   KEYSTORE_BASE64 = the complete contents of keystore.base64
+   KEYSTORE_PASSWORD = value in SECRETS.txt
+   KEY_ALIAS = value in SECRETS.txt
+   KEY_PASSWORD = value in SECRETS.txt
+5) Commit the project and run Actions -> Android Build.
+6) Keep konj-release.jks in a safe private backup. It is the permanent signing key for future updates.
+
+IMPORTANT:
+- Do not uninstall the app for future updates.
+- Every future release must keep package id com.konj.planner and use this same keystore.
+- versionCode is increased from 11 to 12 in this release.
