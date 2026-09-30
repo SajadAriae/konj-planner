@@ -137,10 +137,22 @@ jobs:
               else:
                   text += f"""
 
-dependencies {{
-    {dependency}
-}}
-"""
+          dependency = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+
+          if "coreLibraryDesugaring(" not in text:
+              if "dependencies {" in text:
+                  text = text.replace(
+                      "dependencies {",
+                      "dependencies {\n    " + dependency,
+                      1
+                  )
+              else:
+                  text += (
+                      "\n\n"
+                      "dependencies {\n"
+                      "    " + dependency + "\n"
+                      "}\n"
+                  )
 
           path.write_text(text, encoding="utf-8")
 
@@ -150,14 +162,10 @@ dependencies {{
           print(text)
 
           if "isCoreLibraryDesugaringEnabled = true" not in text:
-              raise Exception(
-                  "Desugaring was NOT enabled!"
-              )
+              raise Exception("Desugaring was NOT enabled!")
 
           if "desugar_jdk_libs" not in text:
-              raise Exception(
-                  "desugar_jdk_libs dependency was NOT added!"
-              )
+              raise Exception("desugar_jdk_libs dependency was NOT added!")
 
           print("======================================")
           print("DESUGARING CONFIGURATION OK")
