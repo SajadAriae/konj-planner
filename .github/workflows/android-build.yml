@@ -118,18 +118,18 @@ jobs:
           if 'android:icon="@mipmap/ic_launcher"' in m and Path("android/app/src/main/res/drawable/konj_logo.png").exists():
               m = m.replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/konj_logo"', 1)
 
-          receiver = '''
-
-          <receiver
-            android:name=".KonjPlannerWidgetProvider"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/konj_planner_widget_info" />
-          </receiver>'''
+          receiver = (
+              "\n        <receiver"
+              "\n            android:name=\".KonjPlannerWidgetProvider\""
+              "\n            android:exported=\"true\">"
+              "\n            <intent-filter>"
+              "\n                <action android:name=\"android.appwidget.action.APPWIDGET_UPDATE\" />"
+              "\n            </intent-filter>"
+              "\n            <meta-data"
+              "\n                android:name=\"android.appwidget.provider\""
+              "\n                android:resource=\"@xml/konj_planner_widget_info\" />"
+              "\n        </receiver>"
+          )
 
           if "KonjPlannerWidgetProvider" not in m:
               m = m.replace("    </application>", receiver + "\n    </application>", 1)
@@ -144,8 +144,65 @@ jobs:
       - name: Flutter Pub Get
         run: flutter pub get
 
+      - name: Configure release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -e
+
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "ERROR: Release signing secrets are not configured in GitHub."
+            echo "Required: KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD"
+            exit 1
+          fi
+
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/konj-release.jks
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/build.gradle.kts")
+          s = p.read_text(encoding="utf-8")
+
+          if 'create("konjRelease")' not in s:
+              marker = "    buildTypes {"
+              lines = [
+                  "    signingConfigs {",
+                  "        create(\"konjRelease\") {",
+                  "            storeFile = file(\"../konj-release.jks\")",
+                  "            storePassword = System.getenv(\"KEYSTORE_PASSWORD\")",
+                  "            keyAlias = System.getenv(\"KEY_ALIAS\")",
+                  "            keyPassword = System.getenv(\"KEY_PASSWORD\")",
+                  "        }",
+                  "    }",
+                  "",
+              ]
+              signing = "\n".join(lines) + "\n"
+              if marker not in s:
+                  raise SystemExit("buildTypes block not found")
+              s = s.replace(marker, signing + marker, 1)
+
+          s = s.replace(
+              'signingConfig = signingConfigs.getByName("debug")',
+              'signingConfig = signingConfigs.getByName("konjRelease")',
+              1,
+          )
+
+          p.write_text(s, encoding="utf-8")
+          PY
+
+          echo "Release signing configured."
+
       - name: Build Release APK
-        run: flutter build apk --release
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          flutter build apk --release
 
       - name: Prepare APK
         run: |
