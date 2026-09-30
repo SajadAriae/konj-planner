@@ -1,4 +1,4 @@
-name: Konj Planner Android Build
+name: Android Build
 
 on:
   push:
@@ -12,22 +12,43 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      # ----------------------------------------
+      # 1. Download repository
+      # ----------------------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      # ----------------------------------------
+      # 2. Java 17
+      # ----------------------------------------
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      # ----------------------------------------
+      # 3. Flutter
+      # ----------------------------------------
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      - name: Create Android project
+      # ----------------------------------------
+      # 4. Show versions
+      # ----------------------------------------
+      - name: Show Flutter and Dart versions
+        run: |
+          flutter --version
+          dart --version
+          java -version
+
+      # ----------------------------------------
+      # 5. Create Android platform
+      # ----------------------------------------
+      - name: Create Android platform
         run: |
           flutter create \
             --project-name planner \
@@ -35,81 +56,51 @@ jobs:
             --platforms android \
             .
 
-      - name: Configure Android
-        shell: python
+      # ----------------------------------------
+      # 6. Configure Android Gradle
+      # ----------------------------------------
+      - name: Configure Android Gradle
         run: |
+          python3 <<'PY'
           from pathlib import Path
-          import re
 
           path = Path("android/app/build.gradle.kts")
+
+          if not path.exists():
+              raise Exception("android/app/build.gradle.kts was not found!")
+
           text = path.read_text(encoding="utf-8")
 
-          # ------------------------------------------------
-          # 1. Enable Core Library Desugaring
-          # ------------------------------------------------
+          # ----------------------------------------
+          # Enable Java 17 + Core Library Desugaring
+          # ----------------------------------------
 
-          if "isCoreLibraryDesugaringEnabled" in text:
-              text = re.sub(
-                  r"isCoreLibraryDesugaringEnabled\s*=\s*(true|false)",
-                  "isCoreLibraryDesugaringEnabled = true",
-                  text
-              )
-          else:
-              compile_options = re.search(
-                  r"compileOptions\s*\{",
-                  text
-              )
+          if "isCoreLibraryDesugaringEnabled = true" not in text:
 
-              if compile_options:
-                  pos = compile_options.end()
-                  text = (
-                      text[:pos]
-                      + "\n        isCoreLibraryDesugaringEnabled = true"
-                      + text[pos:]
+              compile_block = """
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+                  isCoreLibraryDesugaringEnabled = true
+              }
+              """
+
+              marker = "\n}\n\nflutter {"
+
+              if marker in text:
+                  text = text.replace(
+                      marker,
+                      compile_block + marker,
+                      1
                   )
               else:
-                  android_block = re.search(
-                      r"android\s*\{",
-                      text
+                  raise Exception(
+                      "Could not find android block in build.gradle.kts"
                   )
 
-                  if not android_block:
-                      raise Exception(
-                          "Could not find android { block"
-                      )
-
-                  pos = android_block.end()
-
-                  block = """
-                  
-                      compileOptions {
-                          isCoreLibraryDesugaringEnabled = true
-                          sourceCompatibility = JavaVersion.VERSION_17
-                          targetCompatibility = JavaVersion.VERSION_17
-                      }
-                  """
-
-                  text = text[:pos] + block + text[pos:]
-
-          # ------------------------------------------------
-          # 2. Java 17
-          # ------------------------------------------------
-
-          text = re.sub(
-              r"sourceCompatibility\s*=\s*JavaVersion\.[A-Z0-9_]+",
-              "sourceCompatibility = JavaVersion.VERSION_17",
-              text
-          )
-
-          text = re.sub(
-              r"targetCompatibility\s*=\s*JavaVersion\.[A-Z0-9_]+",
-              "targetCompatibility = JavaVersion.VERSION_17",
-              text
-          )
-
-          # ------------------------------------------------
-          # 3. Add desugar_jdk_libs
-          # ------------------------------------------------
+          # ----------------------------------------
+          # Add desugaring dependency
+          # ----------------------------------------
 
           dependency = (
               'coreLibraryDesugaring('
@@ -119,75 +110,74 @@ jobs:
 
           if "desugar_jdk_libs" not in text:
 
-              dependencies_match = re.search(
-                  r"dependencies\s*\{",
-                  text
+              text += (
+                  "\n\n"
+                  "dependencies {\n"
+                  "    " + dependency + "\n"
+                  "}\n"
               )
-
-              if dependencies_match:
-                  pos = dependencies_match.end()
-
-                  text = (
-                      text[:pos]
-                      + "\n    "
-                      + dependency
-                      + text[pos:]
-                  )
-
-              else:
-                  text += f"""
-
-          dependency = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
-
-          if "coreLibraryDesugaring(" not in text:
-              if "dependencies {" in text:
-                  text = text.replace(
-                      "dependencies {",
-                      "dependencies {\n    " + dependency,
-                      1
-                  )
-              else:
-                  text += (
-                      "\n\n"
-                      "dependencies {\n"
-                      "    " + dependency + "\n"
-                      "}\n"
-                  )
 
           path.write_text(text, encoding="utf-8")
 
-          print("======================================")
+          # ----------------------------------------
+          # Verify configuration
+          # ----------------------------------------
+
+          print("========================================")
           print("FINAL ANDROID GRADLE CONFIG")
-          print("======================================")
+          print("========================================")
           print(text)
+          print("========================================")
 
           if "isCoreLibraryDesugaringEnabled = true" not in text:
-              raise Exception("Desugaring was NOT enabled!")
+              raise Exception(
+                  "ERROR: Core Library Desugaring was NOT enabled!"
+              )
 
           if "desugar_jdk_libs" not in text:
-              raise Exception("desugar_jdk_libs dependency was NOT added!")
+              raise Exception(
+                  "ERROR: desugar_jdk_libs dependency was NOT added!"
+              )
 
-          print("======================================")
           print("DESUGARING CONFIGURATION OK")
-          print("======================================")
+          print("========================================")
+          PY
 
-      - name: Get dependencies
-        run: flutter pub get
-
-      - name: Verify Android configuration
+      # ----------------------------------------
+      # 7. Get Flutter packages
+      # ----------------------------------------
+      - name: Flutter Pub Get
         run: |
-          echo "Checking desugaring..."
-          grep -n "isCoreLibraryDesugaringEnabled" \
-            android/app/build.gradle.kts
+          flutter pub get
 
-          grep -n "desugar_jdk_libs" \
-            android/app/build.gradle.kts
+      # ----------------------------------------
+      # 8. Analyze project
+      # ----------------------------------------
+      - name: Flutter Analyze
+        run: |
+          flutter analyze --no-fatal-infos
 
-      - name: Build APK
-        run: flutter build apk --release
+      # ----------------------------------------
+      # 9. Build release APK
+      # ----------------------------------------
+      - name: Build Release APK
+        run: |
+          flutter build apk --release
 
+      # ----------------------------------------
+      # 10. Rename APK
+      # ----------------------------------------
+      - name: Prepare APK
+        run: |
+          mkdir -p release
+          cp build/app/outputs/flutter-apk/app-release.apk release/Konj-Planner.apk
+
+      # ----------------------------------------
+      # 11. Upload APK
+      # ----------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: konj-planner-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: Konj-Planner-APK
+          path: release/Konj-Planner.apk
+          if-no-files-found: error
