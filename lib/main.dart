@@ -535,30 +535,122 @@ Future<void> askPerms() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  tzd.initializeTimeZones();
-  tz.setLocalLocation(tz.getLocation('Asia/Tehran'));
-  prefs = await SharedPreferences.getInstance();
-  jal = prefs.getBool('jal') ?? true;
-  D.load();
+  // UI is mounted immediately. All local services are initialized by Bootstrap
+  // after the first frame, so notification/widget failures can never block the UI.
+  runApp(const Bootstrap());
+}
 
-  await notif.initialize(
-    const InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    ),
-  );
+class Bootstrap extends StatefulWidget {
+  const Bootstrap({super.key});
 
-  // هر بار نصب/آپدیت یا اجرای برنامه، هر دو مجوز را بررسی می‌کنیم.
+  @override
+  State<Bootstrap> createState() => _BootstrapState();
+}
+
+class _BootstrapState extends State<Bootstrap> {
+  bool ready = false;
+  Object? error;
+
+  @override
+  void initState() {
+    super.initState();
+    _boot();
+  }
+
+  Future<void> _boot() async {
+    try {
+      tzd.initializeTimeZones();
+      tz.setLocalLocation(tz.getLocation('Asia/Tehran'));
+      prefs = await SharedPreferences.getInstance();
+      jal = prefs.getBool('jal') ?? true;
+      D.load();
+
+      if (!mounted) return;
+      setState(() => ready = true);
+
+      // Never block the first frame with notifications or widgets.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _initBackgroundServices();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => error = e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (ready) return const App();
+
+    if (error != null) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Konj Planner',
+        home: Scaffold(
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.error_outline, size: 52),
+                  const SizedBox(height: 16),
+                  const Text('راه‌اندازی برنامه با مشکل مواجه شد', textAlign: TextAlign.center),
+                  const SizedBox(height: 8),
+                  Text('$error', textAlign: TextAlign.center),
+                  const SizedBox(height: 20),
+                  FilledButton(onPressed: () => setState(() { error = null; ready = false; _boot(); }), child: const Text('تلاش دوباره')),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Konj Planner',
+      home: Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.task_alt, size: 64),
+              SizedBox(height: 16),
+              Text('Konj Planner', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              SizedBox(height: 12),
+              CircularProgressIndicator(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _initBackgroundServices() async {
   try {
+    await notif.initialize(
+      const InitializationSettings(
+        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      ),
+    );
+
     final a = notif.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     await a?.requestNotificationsPermission();
     await a?.requestExactAlarmsPermission();
+  } catch (_) {
+    // Notification errors must never affect the app UI.
+  }
+
+  try {
+    await scheduleAll();
   } catch (_) {}
 
-  runApp(const App());
-  WidgetsBinding.instance.addPostFrameCallback((_) async {
-    await scheduleAll();
+  try {
     await syncHomeWidget();
-  });
+  } catch (_) {}
 }
 
 class App extends StatelessWidget {
