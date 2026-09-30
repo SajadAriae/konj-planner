@@ -12,43 +12,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # ----------------------------------------
-      # 1. Checkout
-      # ----------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ----------------------------------------
-      # 2. Java 17
-      # ----------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # ----------------------------------------
-      # 3. Flutter Stable
-      # ----------------------------------------
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
-      # ----------------------------------------
-      # 4. Versions
-      # ----------------------------------------
       - name: Show versions
         run: |
           flutter --version
           dart --version
           java -version
 
-      # ----------------------------------------
-      # 5. Create Android project
-      # ----------------------------------------
       - name: Create Android platform
         run: |
           flutter create \
@@ -57,155 +41,118 @@ jobs:
             --platforms android \
             .
 
-      # ----------------------------------------
-      # 6. Configure Android
-      # ----------------------------------------
-      - name: Configure Android
+      - name: Install Konj Android widget files
         run: |
           set -e
 
-          echo "========================================"
-          echo "Configuring Android Gradle"
-          echo "========================================"
+          mkdir -p android/app/src/main/kotlin/com/konj/planner
+          mkdir -p android/app/src/main/res/layout
+          mkdir -p android/app/src/main/res/xml
+          mkdir -p android/app/src/main/res/drawable
 
-          # --------------------------------------
-          # Disable AGP 9 new DSL temporarily
-          # --------------------------------------
+          cp widget_android/kotlin/com/konj/planner/KonjPlannerWidgetProvider.kt \
+            android/app/src/main/kotlin/com/konj/planner/
 
-          GRADLE_PROPERTIES="android/gradle.properties"
+          cp widget_android/res/layout/konj_planner_widget.xml \
+            android/app/src/main/res/layout/
 
-          if [ -f "$GRADLE_PROPERTIES" ]; then
-            echo "android.newDsl=false" >> "$GRADLE_PROPERTIES"
-          else
-            mkdir -p android
-            echo "android.newDsl=false" > "$GRADLE_PROPERTIES"
+          cp widget_android/res/xml/konj_planner_widget_info.xml \
+            android/app/src/main/res/xml/
+
+          cp widget_android/res/drawable/konj_widget_bg.xml \
+            android/app/src/main/res/drawable/
+
+          # Use the repository logo as the launcher icon when available.
+          if [ -f logo.png ]; then
+            cp logo.png android/app/src/main/res/drawable/konj_logo.png
           fi
 
-          echo ""
-          echo "gradle.properties:"
-          cat "$GRADLE_PROPERTIES"
-
-          # --------------------------------------
-          # Configure app/build.gradle.kts
-          # --------------------------------------
+      - name: Configure Android manifest and Gradle
+        run: |
+          set -e
 
           python3 <<'PY'
           from pathlib import Path
 
+          # --------------------------------------------
+          # Android Gradle compatibility for AGP 9
+          # --------------------------------------------
+          gp = Path("android/gradle.properties")
+          text = gp.read_text(encoding="utf-8") if gp.exists() else ""
+          if "android.newDsl=false" not in text:
+              text += "\nandroid.newDsl=false\n"
+          gp.write_text(text, encoding="utf-8")
+
+          # --------------------------------------------
+          # Desugaring required by flutter_local_notifications
+          # --------------------------------------------
           path = Path("android/app/build.gradle.kts")
-
-          if not path.exists():
-              raise SystemExit(
-                  "ERROR: android/app/build.gradle.kts does not exist"
-              )
-
           text = path.read_text(encoding="utf-8")
 
-          # --------------------------------------
-          # Remove any previous broken additions
-          # --------------------------------------
-
-          text = text.replace(
-              'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")',
-              ""
-          )
-
-          # --------------------------------------
-          # Add compileOptions inside android block
-          # --------------------------------------
-
           if "isCoreLibraryDesugaringEnabled = true" not in text:
-
               marker = "android {"
-
-              if marker not in text:
-                  raise SystemExit(
-                      "ERROR: android { block not found"
-                  )
-
-              compile_options = """
+              block = """
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
                   isCoreLibraryDesugaringEnabled = true
               }
               """
+              if marker not in text:
+                  raise SystemExit("android block not found")
+              text = text.replace(marker, marker + block, 1)
 
-              text = text.replace(
-                  marker,
-                  marker + compile_options,
-                  1
-              )
-
-          # --------------------------------------
-          # Add dependency
-          # --------------------------------------
-
-          dependency_block = """
-          
-          dependencies {
-              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-          }
-          """
-
+          dep = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
           if "desugar_jdk_libs" not in text:
-              text += dependency_block
+              text += "\n\ndependencies {\n    " + dep + "\n}\n"
 
           path.write_text(text, encoding="utf-8")
 
-          # --------------------------------------
-          # Verify
-          # --------------------------------------
+          # --------------------------------------------
+          # Manifest: app name + real Android widget
+          # --------------------------------------------
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          m = manifest.read_text(encoding="utf-8")
+          m = m.replace('android:label="planner"', 'android:label="Konj Planner"')
 
-          print("========================================")
-          print("FINAL build.gradle.kts")
-          print("========================================")
-          print(text)
-          print("========================================")
+          if 'android:icon="@mipmap/ic_launcher"' in m and Path("android/app/src/main/res/drawable/konj_logo.png").exists():
+              m = m.replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/konj_logo"', 1)
 
-          if "isCoreLibraryDesugaringEnabled = true" not in text:
-              raise SystemExit(
-                  "ERROR: Desugaring was not enabled!"
-              )
+          receiver = '''
 
-          if "desugar_jdk_libs:2.1.4" not in text:
-              raise SystemExit(
-                  "ERROR: desugar_jdk_libs dependency missing!"
-              )
+          <receiver
+            android:name=".KonjPlannerWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/konj_planner_widget_info" />
+          </receiver>'''
 
-          print("ANDROID GRADLE CONFIGURATION OK")
+          if "KonjPlannerWidgetProvider" not in m:
+              m = m.replace("    </application>", receiver + "\n    </application>", 1)
+
+          manifest.write_text(m, encoding="utf-8")
+
+          print("ANDROID CONFIGURATION READY")
+          print(path.read_text(encoding="utf-8"))
+          print(manifest.read_text(encoding="utf-8"))
           PY
 
-      # ----------------------------------------
-      # 7. Flutter dependencies
-      # ----------------------------------------
       - name: Flutter Pub Get
-        run: |
-          flutter pub get
+        run: flutter pub get
 
-      # ----------------------------------------
-      # 8. Build APK
-      # ----------------------------------------
       - name: Build Release APK
-        run: |
-          flutter build apk --release
+        run: flutter build apk --release
 
-      # ----------------------------------------
-      # 9. Prepare APK
-      # ----------------------------------------
       - name: Prepare APK
         run: |
           mkdir -p release
-
-          cp \
-            build/app/outputs/flutter-apk/app-release.apk \
-            release/Konj-Planner.apk
-
+          cp build/app/outputs/flutter-apk/app-release.apk release/Konj-Planner.apk
           ls -lh release/Konj-Planner.apk
 
-      # ----------------------------------------
-      # 10. Upload APK
-      # ----------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
