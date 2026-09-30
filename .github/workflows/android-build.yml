@@ -35,52 +35,145 @@ jobs:
             --platforms android \
             .
 
-      - name: Restore project files
-        run: |
-          echo "Project files:"
-          ls -la
-          echo "Dart source:"
-          ls -la lib
-
       - name: Configure Android
+        shell: python
         run: |
-          python3 - <<'PY'
           from pathlib import Path
           import re
 
-          p = Path("android/app/build.gradle.kts")
-          s = p.read_text()
+          path = Path("android/app/build.gradle.kts")
+          text = path.read_text(encoding="utf-8")
 
-          if "isCoreLibraryDesugaringEnabled" not in s:
-              s = s.replace(
-                  "compileOptions {",
-                  """compileOptions {
-                      isCoreLibraryDesugaringEnabled = true""",
-                  1
-              )
-          else:
-              s = re.sub(
+          # ------------------------------------------------
+          # 1. Enable Core Library Desugaring
+          # ------------------------------------------------
+
+          if "isCoreLibraryDesugaringEnabled" in text:
+              text = re.sub(
                   r"isCoreLibraryDesugaringEnabled\s*=\s*(true|false)",
                   "isCoreLibraryDesugaringEnabled = true",
-                  s
+                  text
+              )
+          else:
+              compile_options = re.search(
+                  r"compileOptions\s*\{",
+                  text
               )
 
-          if "desugar_jdk_libs" not in s:
-              s = s.replace(
-                  "dependencies {",
-                  """dependencies {
-              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")""",
-                  1
+              if compile_options:
+                  pos = compile_options.end()
+                  text = (
+                      text[:pos]
+                      + "\n        isCoreLibraryDesugaringEnabled = true"
+                      + text[pos:]
+                  )
+              else:
+                  android_block = re.search(
+                      r"android\s*\{",
+                      text
+                  )
+
+                  if not android_block:
+                      raise Exception(
+                          "Could not find android { block"
+                      )
+
+                  pos = android_block.end()
+
+                  block = """
+                  
+                      compileOptions {
+                          isCoreLibraryDesugaringEnabled = true
+                          sourceCompatibility = JavaVersion.VERSION_17
+                          targetCompatibility = JavaVersion.VERSION_17
+                      }
+                  """
+
+                  text = text[:pos] + block + text[pos:]
+
+          # ------------------------------------------------
+          # 2. Java 17
+          # ------------------------------------------------
+
+          text = re.sub(
+              r"sourceCompatibility\s*=\s*JavaVersion\.[A-Z0-9_]+",
+              "sourceCompatibility = JavaVersion.VERSION_17",
+              text
+          )
+
+          text = re.sub(
+              r"targetCompatibility\s*=\s*JavaVersion\.[A-Z0-9_]+",
+              "targetCompatibility = JavaVersion.VERSION_17",
+              text
+          )
+
+          # ------------------------------------------------
+          # 3. Add desugar_jdk_libs
+          # ------------------------------------------------
+
+          dependency = (
+              'coreLibraryDesugaring('
+              '"com.android.tools:desugar_jdk_libs:2.1.4"'
+              ')'
+          )
+
+          if "desugar_jdk_libs" not in text:
+
+              dependencies_match = re.search(
+                  r"dependencies\s*\{",
+                  text
               )
 
-          p.write_text(s)
+              if dependencies_match:
+                  pos = dependencies_match.end()
 
-          print("Android configuration completed.")
-          print(p.read_text())
-          PY
+                  text = (
+                      text[:pos]
+                      + "\n    "
+                      + dependency
+                      + text[pos:]
+                  )
+
+              else:
+                  text += f"""
+
+dependencies {{
+    {dependency}
+}}
+"""
+
+          path.write_text(text, encoding="utf-8")
+
+          print("======================================")
+          print("FINAL ANDROID GRADLE CONFIG")
+          print("======================================")
+          print(text)
+
+          if "isCoreLibraryDesugaringEnabled = true" not in text:
+              raise Exception(
+                  "Desugaring was NOT enabled!"
+              )
+
+          if "desugar_jdk_libs" not in text:
+              raise Exception(
+                  "desugar_jdk_libs dependency was NOT added!"
+              )
+
+          print("======================================")
+          print("DESUGARING CONFIGURATION OK")
+          print("======================================")
 
       - name: Get dependencies
         run: flutter pub get
+
+      - name: Verify Android configuration
+        run: |
+          echo "Checking desugaring..."
+          grep -n "isCoreLibraryDesugaringEnabled" \
+            android/app/build.gradle.kts
+
+          grep -n "desugar_jdk_libs" \
+            android/app/build.gradle.kts
 
       - name: Build APK
         run: flutter build apk --release
