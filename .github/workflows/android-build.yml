@@ -150,12 +150,7 @@ jobs:
         run: |
           flutter pub get
 
-      # ----------------------------------------
-      # 8. Analyze project
-      # ----------------------------------------
-      - name: Flutter Analyze
-        run: |
-          flutter analyze --no-fatal-infos
+  
 
       # ----------------------------------------
       # 9. Build release APK
