@@ -1,9 +1,11 @@
 name: planner
-description: Offline personal planner
+description: Konj Planner - Offline personal planner
 publish_to: none
-version: 0.3.0+3
+version: 1.0.0+10
+
 environment:
-  sdk: ">=3.3.0 <4.0.0"
+  sdk: ">=3.10.0 <4.0.0"
+
 dependencies:
   flutter:
     sdk: flutter
@@ -11,5 +13,6 @@ dependencies:
   flutter_local_notifications: 17.2.4
   timezone: ^0.9.4
   home_widget: ^0.10.0
+
 flutter:
   uses-material-design: true
