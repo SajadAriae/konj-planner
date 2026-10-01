@@ -14,5 +14,15 @@ dependencies:
   timezone: ^0.9.4
   home_widget: ^0.10.0
 
+dev_dependencies:
+  flutter_launcher_icons: ^0.14.1
+
 flutter:
   uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/logo.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/logo.png"
