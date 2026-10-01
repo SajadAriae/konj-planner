@@ -415,11 +415,39 @@ Future<void> syncHomeWidget() async {
     await HomeWidget.saveWidgetData<String>('goalTitle', goal?['t']?.toString() ?? 'هنوز هدفی ثبت نشده');
     await HomeWidget.saveWidgetData<String>('goalProgress', '${goal?['progress'] ?? 0}');
     await HomeWidget.saveWidgetData<String>('today', fd(ds(now)));
+    final top = D.tasks.where((k) => k['done'] != true).toList()
+      ..sort((a, b) {
+        final s = (b['star'] == true ? 1 : 0) - (a['star'] == true ? 1 : 0);
+        return s != 0 ? s : ((a['r'] ?? '9') as String).compareTo((b['r'] ?? '9') as String);
+      });
+    for (var i = 0; i < 3; i++) {
+      await HomeWidget.saveWidgetData<String>('t${i + 1}', i < top.length ? '${top[i]['star'] == true ? '★ ' : ''}${top[i]['t']}' : '');
+      await HomeWidget.saveWidgetData<String>('t${i + 1}id', i < top.length ? '${top[i]['id']}' : '');
+    }
     await HomeWidget.updateWidget(androidName: 'KonjPlannerWidgetProvider');
   } catch (_) {}
 }
 
 // ───────────────────────── اعلان‌ها ─────────────────────────
+// تیک زدن کار از روی ویجت؛ در ایزوله‌ی پس‌زمینه اجرا می‌شود
+@pragma('vm:entry-point')
+Future<void> widgetBackground(Uri? uri) async {
+  if (uri == null || uri.host != 'done' || uri.pathSegments.isEmpty) return;
+  final id = int.tryParse(uri.pathSegments.first);
+  if (id == null) return;
+  WidgetsFlutterBinding.ensureInitialized();
+  prefs = await SharedPreferences.getInstance();
+  await prefs.reload();
+  jal = prefs.getBool('jal') ?? true;
+  D.load();
+  final hit = D.tasks.where((x) => x['id'] == id).toList();
+  if (hit.isEmpty) return;
+  hit.first['done'] = true;
+  hit.first['doneAt'] = ds(DateTime.now());
+  await D.save();
+  await syncHomeWidget();
+}
+
 const nd = NotificationDetails(
   android: AndroidNotificationDetails(
     'konj_reminders_v2',
@@ -638,6 +666,9 @@ class _BootstrapState extends State<Bootstrap> {
 
 Future<void> _initBackgroundServices() async {
   try {
+    await HomeWidget.registerInteractivityCallback(widgetBackground);
+  } catch (_) {}
+  try {
     await notif.initialize(
       const InitializationSettings(
         android: AndroidInitializationSettings('ic_notif'),
@@ -781,7 +812,7 @@ class _Sub {
   _Sub(String t, this.done) : c = TextEditingController(text: t);
 }
 
-class _H extends State<Home> {
+class _H extends State<Home> with WidgetsBindingObserver {
   int tab = 0, cy = 1400, cm = 1;
   String q = '';
   DateTime sel = DateTime.now();
@@ -789,6 +820,9 @@ class _H extends State<Home> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    HomeWidget.widgetClicked.listen(_widgetUri);
+    HomeWidget.initiallyLaunchedFromHomeWidget().then(_widgetUri);
     sel = DateTime(sel.year, sel.month, sel.day);
     final j = g2j(sel.year, sel.month, sel.day);
     cy = j[0];
@@ -796,6 +830,34 @@ class _H extends State<Home> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!(prefs.getBool('guide') ?? false)) openGuide();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // برگشت به برنامه: تغییرهای ویجت (کار تیک‌خورده) دوباره خوانده می‌شود تا ذخیره‌ی بعدی روی‌شان نوشته نشود
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState s) async {
+    if (s != AppLifecycleState.resumed) return;
+    await prefs.reload();
+    D.load();
+    if (mounted) setState(() {});
+    scheduleAll();
+    syncHomeWidget();
+  }
+
+  void _widgetUri(Uri? u) {
+    if (u == null || !mounted) return;
+    if (u.host == 'addtask') {
+      setState(() => tab = 0);
+      taskSheet();
+    } else if (u.host == 'addtx') {
+      setState(() => tab = 4);
+      txSheet();
+    }
   }
 
   void openGuide() => Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => const Guide()));
