@@ -67,6 +67,18 @@ jobs:
             cp logo.png android/app/src/main/res/drawable/konj_logo.png
           fi
 
+      - name: Add notification icon
+        run: |
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/ic_notif.xml <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+            <path android:fillColor="#FFFFFFFF"
+                android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM10,17l-5,-5 1.41,-1.41L10,14.17l7.59,-7.59L19,8l-9,9z"/>
+          </vector>
+          XML
+
       - name: Configure Android manifest and Gradle
         run: |
           set -e
@@ -115,7 +127,7 @@ jobs:
           m = manifest.read_text(encoding="utf-8")
           m = m.replace('android:label="planner"', 'android:label="Konj Planner"')
 
-          if 'android:icon="@mipmap/ic_launcher"' in m and Path("android/app/src/main/res/drawable/konj_logo.png").exists():
+          if 'android:icon="@mipmap/ic_launcher"' in m and False:
               m = m.replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/konj_logo"', 1)
 
           receiver = (
@@ -134,6 +146,19 @@ jobs:
           if "KonjPlannerWidgetProvider" not in m:
               m = m.replace("    </application>", receiver + "\n    </application>", 1)
 
+          import re
+          perm = ''.join('\n    <uses-permission android:name="android.permission.%s"/>' % p for p in ['POST_NOTIFICATIONS', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM', 'RECEIVE_BOOT_COMPLETED', 'WAKE_LOCK', 'VIBRATE'])
+          if 'USE_EXACT_ALARM' not in m:
+              m = re.sub(r'(<manifest[^>]*>)', lambda x: x.group(1) + perm, m, count=1)
+          nrecv = ('\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />'
+                   '\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">'
+                   '\n            <intent-filter>'
+                   '\n                <action android:name="android.intent.action.BOOT_COMPLETED" />'
+                   '\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />'
+                   '\n            </intent-filter>'
+                   '\n        </receiver>')
+          if 'ScheduledNotificationReceiver' not in m:
+              m = m.replace('    </application>', nrecv + '\n    </application>', 1)
           manifest.write_text(m, encoding="utf-8")
 
           print("ANDROID CONFIGURATION READY")
@@ -143,6 +168,9 @@ jobs:
 
       - name: Flutter Pub Get
         run: flutter pub get
+
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
 
       - name: Configure release signing
         env:
@@ -187,7 +215,7 @@ jobs:
 
           s = s.replace(
               'signingConfig = signingConfigs.getByName("debug")',
-              'signingConfig = signingConfigs.getByName("konjRelease")',
+              'signingConfig = signingConfigs.getByName("konjRelease")\n            isMinifyEnabled = false\n            isShrinkResources = false',
               1,
           )
 
@@ -202,7 +230,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          flutter build apk --release
+          flutter build apk --release --build-number=$((GITHUB_RUN_NUMBER + 100))
 
       - name: Prepare APK
         run: |
