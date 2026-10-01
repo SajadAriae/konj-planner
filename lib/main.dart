@@ -8,7 +8,7 @@ import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
 
 // ───────────────────────── تنظیمات و ثابت‌ها ─────────────────────────
-const kVer = 4; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
+const kVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
 final notif = FlutterLocalNotificationsPlugin();
 late SharedPreferences prefs;
 final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/حالت تیره) زیاد می‌شود
@@ -287,7 +287,7 @@ class _JPickS extends State<_JPick> {
 
 // ───────────────────────── داده‌ها ─────────────────────────
 class D {
-  static List<Map> tasks = [], events = [], txs = [], goals = [];
+  static List<Map> tasks = [], events = [], txs = [], goals = [], habits = [];
   static List<String> cats = [];
   static const defCats = ['غذا', 'حمل‌ونقل', 'خرید', 'قبوض', 'کار', 'سایر'];
 
@@ -308,6 +308,11 @@ class D {
     events = _readList('events');
     txs = _readList('txs');
     goals = _readList('goals');
+    habits = _readList('habits');
+    for (final h in habits) {
+      h['log'] ??= [];
+      h['id'] ??= DateTime.now().microsecondsSinceEpoch;
+    }
 
     try {
       final c = jsonDecode(prefs.getString('cats') ?? 'null');
@@ -341,6 +346,7 @@ class D {
     await prefs.setString('events', jsonEncode(events));
     await prefs.setString('txs', jsonEncode(txs));
     await prefs.setString('goals', jsonEncode(goals));
+    await prefs.setString('habits', jsonEncode(habits));
     await prefs.setString('cats', jsonEncode(cats));
   }
 
@@ -351,6 +357,7 @@ class D {
         'events': events,
         'txs': txs,
         'goals': goals,
+        'habits': habits,
         'cats': cats,
         'clr': prefs.getInt('clr') ?? 0,
         'tm': prefs.getInt('tm') ?? 0,
@@ -369,6 +376,7 @@ class D {
       await prefs.setString('events', jsonEncode(e));
       await prefs.setString('txs', jsonEncode(x));
       await prefs.setString('goals', jsonEncode(g));
+      if (m['habits'] is List) await prefs.setString('habits', jsonEncode(m['habits']));
       if (m['cats'] is List) await prefs.setString('cats', jsonEncode(m['cats']));
       if (m['clr'] is int) await prefs.setInt('clr', m['clr']);
       if (m['tm'] is int) await prefs.setInt('tm', m['tm']);
@@ -420,45 +428,39 @@ const nd = NotificationDetails(
     playSound: true,
     enableVibration: true,
     channelShowBadge: true,
+    icon: 'ic_notif',
   ),
 );
 
-int taskNid(int id) => 200000000 + id;
-int eventNid(int id) => 100000000 + id;
+int taskNid(int id) => 1000000000 + (id.abs() % 500000000);
+int eventNid(int id) => 1500000000 + (id.abs() % 500000000);
+
+String lastErr = '';
 
 Future<bool> zs(int id, String t, String b, tz.TZDateTime w, {bool weekly = false}) async {
-  try {
-    await notif.zonedSchedule(
-      id, t, b, w, nd,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-      matchDateTimeComponents: weekly ? DateTimeComponents.dayOfWeekAndTime : null,
-    );
-    return true;
-  } catch (_) {
+  for (final mode in [AndroidScheduleMode.exactAllowWhileIdle, AndroidScheduleMode.alarmClock, AndroidScheduleMode.inexactAllowWhileIdle]) {
     try {
-      await notif.zonedSchedule(
-        id, t, b, w, nd,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: weekly ? DateTimeComponents.dayOfWeekAndTime : null,
-      );
+      await notif.zonedSchedule(id, t, b, w, nd,
+          androidScheduleMode: mode,
+          uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
+          matchDateTimeComponents: weekly ? DateTimeComponents.dayOfWeekAndTime : null);
       return true;
-    } catch (_) {
-      return false;
+    } catch (e) {
+      lastErr = '$e';
     }
   }
+  return false;
 }
 
 tz.TZDateTime nextAt(int wd, int m) {
-  final now = tz.TZDateTime.now(tz.local);
-  var day = tz.TZDateTime(tz.local, now.year, now.month, now.day);
-  var t = day.add(Duration(minutes: m));
+  final now = DateTime.now();
+  var t = DateTime(now.year, now.month, now.day).add(Duration(minutes: m));
+  var day = DateTime(now.year, now.month, now.day);
   while (t.weekday != wd || !t.isAfter(now)) {
-    day = day.add(const Duration(days: 1));
-    t = tz.TZDateTime(tz.local, day.year, day.month, day.day, m ~/ 60, m % 60);
+    day = DateTime(day.year, day.month, day.day + 1);
+    t = DateTime(day.year, day.month, day.day, m ~/ 60, m % 60);
   }
-  return t;
+  return tz.TZDateTime.from(t, tz.local);
 }
 
 Future<bool> schedule(Map e) {
@@ -501,6 +503,9 @@ Future<bool> scheduleHope(int m) async {
 }
 
 Future<void> scheduleAll() async {
+  try {
+    await notif.cancelAll(); // پاک‌کردن زمان‌بندی‌های قدیمی/یتیم تا دوبار نوتیف نیاد
+  } catch (_) {}
   final today = ds(DateTime.now());
 
   for (final e in D.events) {
@@ -633,7 +638,7 @@ Future<void> _initBackgroundServices() async {
   try {
     await notif.initialize(
       const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: AndroidInitializationSettings('ic_notif'),
       ),
     );
 
@@ -905,6 +910,14 @@ class _H extends State<Home> {
                             icon: const Icon(Icons.notifications),
                             label: const Text('ارسال آزمایشی'),
                             onPressed: () => notif.show(1, 'یه پیام برای تو', hope[DateTime.now().weekday - 1], nd)),
+                        OutlinedButton.icon(
+                            icon: const Icon(Icons.alarm),
+                            label: const Text('یادآوری آزمایشی (۱ دقیقه بعد)'),
+                            onPressed: () async {
+                              final ok = await zs(999, 'یادآوری آزمایشی', 'اگه این رو می‌بینی، زمان‌بندی درست کار می‌کنه',
+                                  tz.TZDateTime.now(tz.local).add(const Duration(minutes: 1)));
+                              toast(ok ? 'زمان‌بندی شد؛ تا یک دقیقه‌ی دیگه نوتیف میاد' : 'زمان‌بندی ناموفق بود: $lastErr');
+                            }),
                         OutlinedButton.icon(
                             icon: const Icon(Icons.verified_user),
                             label: const Text('اجازه‌ی زنگ دقیق'),
@@ -1697,15 +1710,104 @@ class _H extends State<Home> {
     ]);
   }
 
+  bool hDone(Map h, String d) => (h['log'] as List).contains(d);
+
+  int streak(Map h) {
+    final now = DateTime.now();
+    var d = DateTime(now.year, now.month, now.day), c = 0;
+    if (!hDone(h, ds(d))) d = DateTime(d.year, d.month, d.day - 1); // امروز هنوز تموم نشده، زنجیره نمی‌شکنه
+    while (hDone(h, ds(d))) {
+      c++;
+      d = DateTime(d.year, d.month, d.day - 1);
+    }
+    return c;
+  }
+
+  Future<void> habitSheet([Map? o]) async {
+    final t = TextEditingController(text: o?['t'] ?? ''), m = TextEditingController(text: o?['min'] ?? '');
+    await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(controller: t, autofocus: o == null, decoration: const InputDecoration(labelText: 'عادت (مثلاً ورزش، مطالعه)')),
+              TextField(controller: m, decoration: const InputDecoration(labelText: 'نسخه‌ی حداقلی برای روزهای بد (مثلاً ۱ دقیقه)')),
+              const SizedBox(height: 12),
+              Row(children: [
+                if (o != null)
+                  TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        D.habits.remove(o);
+                        upd();
+                      },
+                      child: const Text('حذف')),
+                const Spacer(),
+                FilledButton(
+                    onPressed: () {
+                      if (t.text.trim().isEmpty) return;
+                      if (o != null) {
+                        o['t'] = t.text.trim();
+                        o['min'] = m.text.trim();
+                      } else {
+                        D.habits.add({'id': DateTime.now().microsecondsSinceEpoch, 't': t.text.trim(), 'min': m.text.trim(), 'log': []});
+                      }
+                      Navigator.pop(ctx);
+                      upd();
+                    },
+                    child: const Text('ثبت')),
+              ]),
+            ])));
+  }
+
+  Widget habits() {
+    final now = DateTime.now(), today = ds(now);
+    final days = [for (var i = 6; i >= 0; i--) DateTime(now.year, now.month, now.day - i)];
+    final doneToday = D.habits.where((h) => hDone(h, today)).length;
+    return ListView(padding: const EdgeInsets.all(12), children: [
+      if (D.habits.isEmpty)
+        const Padding(padding: EdgeInsets.all(24), child: Text('هنوز عادتی نداری. با + یک عادت کوچیک شروع کن؛ هرچی کوچیک‌تر، ماندگارتر.'))
+      else
+        Padding(padding: const EdgeInsets.only(bottom: 8), child: Text('امروز $doneToday از ${D.habits.length} عادت انجام شد')),
+      for (final h in D.habits)
+        Card(
+            child: ListTile(
+                onTap: () => habitSheet(h),
+                title: Text(h['t']),
+                subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  if ((h['min'] ?? '') != '') Text('حداقل: ${h['min']}', style: const TextStyle(fontSize: 12)),
+                  const SizedBox(height: 4),
+                  Row(children: [
+                    for (final d in days)
+                      Padding(padding: const EdgeInsetsDirectional.only(end: 4), child: Icon(hDone(h, ds(d)) ? Icons.circle : Icons.circle_outlined, size: 12))
+                  ]),
+                  Text('زنجیره: ${streak(h)} روز'),
+                ]),
+                trailing: Checkbox(
+                    value: hDone(h, today),
+                    onChanged: (v) {
+                      final l = h['log'] as List;
+                      if (v == true) {
+                        if (!l.contains(today)) l.add(today);
+                      } else {
+                        l.remove(today);
+                      }
+                      upd();
+                    }))),
+      const SizedBox(height: 80),
+    ]);
+  }
+
   @override
   Widget build(BuildContext c) => Scaffold(
-        appBar: AppBar(title: Text(['کارها', 'تقویم', 'اهداف', 'مالی'][tab]), actions: [
+        appBar: AppBar(title: Text(['کارها', 'تقویم', 'اهداف', 'عادت‌ها', 'مالی'][tab]), actions: [
           IconButton(icon: const Icon(Icons.help_outline), tooltip: 'راهنما', onPressed: openGuide),
           IconButton(icon: const Icon(Icons.settings), tooltip: 'تنظیمات', onPressed: settings),
         ]),
-        body: [tasks, cal, goals, money][tab](),
+        body: [tasks, cal, goals, habits, money][tab](),
         floatingActionButton: FloatingActionButton(
-            onPressed: () => [() => taskSheet(), () => addEvent(), () => goalSheet(), () => txSheet()][tab](), child: const Icon(Icons.add)),
+            onPressed: () => [() => taskSheet(), () => addEvent(), () => goalSheet(), () => habitSheet(), () => txSheet()][tab](), child: const Icon(Icons.add)),
         bottomNavigationBar: NavigationBar(
             selectedIndex: tab,
             onDestinationSelected: (i) => setState(() => tab = i),
@@ -1713,6 +1815,7 @@ class _H extends State<Home> {
               NavigationDestination(icon: Icon(Icons.checklist), label: 'کارها'),
               NavigationDestination(icon: Icon(Icons.calendar_month), label: 'تقویم'),
               NavigationDestination(icon: Icon(Icons.flag_outlined), label: 'اهداف'),
+              NavigationDestination(icon: Icon(Icons.local_fire_department_outlined), label: 'عادت‌ها'),
               NavigationDestination(icon: Icon(Icons.account_balance_wallet), label: 'مالی'),
             ]),
       );
