@@ -1,7 +1,7 @@
 name: planner
 description: Konj Planner - Offline personal planner
 publish_to: none
-version: 1.0.2+12
+version: 1.0.3+13
 
 environment:
   sdk: ">=3.10.0 <4.0.0"
@@ -13,16 +13,17 @@ dependencies:
   flutter_local_notifications: 17.2.4
   timezone: ^0.9.4
   home_widget: ^0.10.0
+  audioplayers: ^6.1.0
 
 dev_dependencies:
-  flutter_launcher_icons: ^0.14.1
+  flutter_launcher_icons: ^0.14.3
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/sounds/
 
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "assets/logo.png"
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/logo.png"
+  image_path: "logo.png"
