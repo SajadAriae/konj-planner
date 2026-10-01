@@ -67,6 +67,11 @@ jobs:
             cp logo.png android/app/src/main/res/drawable/konj_logo.png
           fi
 
+      - name: Install notification sound
+        run: |
+          mkdir -p android/app/src/main/res/raw
+          cp assets/sounds/konj_notify.wav android/app/src/main/res/raw/konj_notify.wav
+
       - name: Add notification icon
         run: |
           mkdir -p android/app/src/main/res/drawable
