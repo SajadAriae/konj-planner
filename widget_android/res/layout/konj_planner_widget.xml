@@ -10,7 +10,6 @@
 <TextView android:id="@+id/widget_goal_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:maxLines="1" android:ellipsize="end" android:textColor="#B8E8D0" android:textSize="11sp"/>
 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:orientation="horizontal">
 <TextView android:id="@+id/widget_add_task" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:padding="8dp" android:text="+ کار" android:textColor="#FFFFFF" android:textSize="13sp" android:background="#2E7D6B"/>
-<View android:layout_width="8dp" android:layout_height="1dp"/>
-<TextView android:id="@+id/widget_add_tx" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:padding="8dp" android:text="+ هزینه" android:textColor="#FFFFFF" android:textSize="13sp" android:background="#2E7D6B"/>
+<TextView android:id="@+id/widget_add_tx" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:layout_weight="1" android:gravity="center" android:padding="8dp" android:text="+ هزینه" android:textColor="#FFFFFF" android:textSize="13sp" android:background="#2E7D6B"/>
 </LinearLayout>
 </LinearLayout>
