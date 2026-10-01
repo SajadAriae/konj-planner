@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:home_widget/home_widget.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -13,6 +14,18 @@ final notif = FlutterLocalNotificationsPlugin();
 late SharedPreferences prefs;
 final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/حالت تیره) زیاد می‌شود
 bool jal = true;
+
+// ───────────────────────── صدای محیط برنامه ─────────────────────────
+final _sfxPlayer = AudioPlayer();
+Future<void> sfx(String name) async {
+  try {
+    if (!(prefs.getBool('sfx') ?? true)) return;
+    await _sfxPlayer.stop();
+    await _sfxPlayer.play(AssetSource('sounds/$name.wav'));
+  } catch (_) {}
+}
+
+const gmn = ['ژانویه', 'فوریه', 'مارس', 'آوریل', 'مه', 'ژوئن', 'ژوئیه', 'اوت', 'سپتامبر', 'اکتبر', 'نوامبر', 'دسامبر'];
 
 class Pal {
   final String name;
@@ -450,12 +463,13 @@ Future<void> widgetBackground(Uri? uri) async {
 
 const nd = NotificationDetails(
   android: AndroidNotificationDetails(
-    'konj_reminders_v2',
+    'konj_reminders_v3',
     'یادآوری‌های Konj Planner',
     channelDescription: 'یادآوری کارها، برنامه‌ها و پیام‌های روزانه',
     importance: Importance.max,
     priority: Priority.high,
     playSound: true,
+    sound: RawResourceAndroidNotificationSound('konj_notify'),
     enableVibration: true,
     channelShowBadge: true,
     icon: 'ic_notif',
@@ -720,15 +734,17 @@ class _GP {
 
 const _pages = [
   _GP(Icons.waving_hand, 'خوش اومدی!',
-      'این برنامه چهار بخش داره: کارها، تقویم، اهداف و مالی.\nاین راهنما هر بخش رو کوتاه توضیح می‌ده. هر وقت خواستی با دکمه‌ی ؟ بالای صفحه دوباره بازش کن.'),
+      'این برنامه چهار بخش داره: کارها، تقویم، اهداف و عادت‌ها، و مالی.\nاین راهنما هر بخش رو کوتاه توضیح می‌ده. هر وقت خواستی با دکمه‌ی ؟ بالای صفحه دوباره بازش کن.'),
   _GP(Icons.checklist, 'کارها',
       '• با دکمه‌ی + یک کار جدید بنویس. اگه خواستی چند «زیرمجموعه» هم براش اضافه کن.\n• ستاره‌ی کنار هر کار رو بزن تا مهم علامت بخوره و بالای لیست بمونه.\n• می‌تونی یه تاریخ و ساعت برای یادآوری بذاری.\n• کار رو با تیک انجام‌شده کن. با منوی ⋮ ویرایش یا زیرمجموعه اضافه کن.\n• کار رو به کنار بکش تا حذف بشه (چند ثانیه فرصت «بازگردانی» داری).\n• پایین صفحه گزارش امروز، هفته و ماه رو می‌بینی.'),
   _GP(Icons.calendar_month, 'برنامه‌ی هفتگی و تقویم',
       '• بالای صفحه تقویم شمسیه؛ روی هر روز بزنی برنامه‌ها و کارهای اون روز پایین نشون داده می‌شه. نقطه‌ی زیر عدد یعنی اون روز برنامه داری.\n• با + برنامه‌ی تکرارشونده (مثل کلاس) با روز هفته، ساعت شروع و پایان و تاریخ پایان ترم بساز.\n• ۱۰ دقیقه قبل از شروع بهت اعلان می‌آد.\n• روی هر برنامه بزنی ویرایشش می‌کنی و با آیکون سطل حذفش می‌کنی.'),
+  _GP(Icons.track_changes, 'اهداف و عادت‌ها',
+      '• هر دو در یک صفحه‌ان: بالا اهداف، پایین عادت‌ها.\n• برای هدف ددلاین بذار و درصد پیشرفت رو هر وقت خواستی عوض کن.\n• عادت‌ها رو هر روز تیک بزن تا زنجیره‌ات ادامه پیدا کنه.\n• با دکمه‌ی + می‌تونی هدف یا عادت جدید بسازی.'),
   _GP(Icons.account_balance_wallet, 'مالی',
-      '• با + هزینه یا درآمد ثبت کن. مبلغ خودش هر سه رقم با نقطه جدا می‌شه تا خوندنش راحت باشه.\n• دسته رو انتخاب کن؛ با «مدیریت دسته‌ها» خودت دسته اضافه یا حذف کن.\n• روی هر تراکنش بزنی می‌تونی مبلغ، دسته و تاریخش رو اصلاح کنی. با آیکون سطل یا کشیدن حذف می‌شه.\n• بالای صفحه جمع امروز، هفته و ماه و بخش جستجو هست.'),
+      '• با + هزینه یا درآمد ثبت کن. مبلغ خودش هر سه رقم با نقطه جدا می‌شه تا خوندنش راحت باشه.\n• دسته رو انتخاب کن؛ با «مدیریت دسته‌ها» خودت دسته اضافه یا حذف کن.\n• روی هر تراکنش بزنی می‌تونی مبلغ، دسته و تاریخش رو اصلاح کنی. با آیکون سطل یا کشیدن حذف می‌شه.\n• بالای صفحه جمع امروز، دیروز، این هفته، هفته‌ی قبل، این ماه و ماه قبل (با نام ماه شمسی) هست. با «تاریخچه» روزها، هفته‌ها و ماه‌های گذشته رو می‌بینی.\n• بودجه‌ی ماه جاری با میزان مصرف و باقی‌مانده هر دسته توی همین صفحه نشون داده می‌شه.'),
   _GP(Icons.settings, 'تنظیمات',
-      'با آیکون چرخ‌دنده:\n• رنگ برنامه و حالت روشن/تیره (نارنجی با پس‌زمینه‌ی خاکستری تیره هم داریم)\n• نمایش تاریخ شمسی\n• پیام امیدبخش روزانه: ساعتش رو انتخاب کن. دکمه‌ی «ارسال آزمایشی» هم برای تست هست.\n• پشتیبان‌گیری: از اطلاعاتت کپی نگه دار و هر وقت خواستی بازیابی کن.'),
+      'با آیکون چرخ‌دنده:\n• رنگ برنامه و حالت روشن/تیره (نارنجی با پس‌زمینه‌ی خاکستری تیره هم داریم)\n• نمایش تاریخ شمسی\n• روشن/خاموش کردن صدای محیط برنامه\n• پیام امیدبخش روزانه: ساعتش رو انتخاب کن. دکمه‌ی «ارسال آزمایشی» هم برای تست هست.\n• پشتیبان‌گیری: از اطلاعاتت کپی نگه دار و هر وقت خواستی بازیابی کن.'),
   _GP(Icons.notifications_active, 'اجازه‌ها',
       'برای اینکه یادآورها دقیق بیان، اجازه‌ی اعلان و «زنگ و یادآور دقیق» رو بده و برنامه رو از محدودیت باتری آزاد کن (بعضی گوشی‌ها برنامه‌ها رو می‌بندن).\n\nدکمه‌ی پایین اجازه‌ها رو درخواست می‌کنه.'),
 ];
@@ -855,7 +871,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       setState(() => tab = 0);
       taskSheet();
     } else if (u.host == 'addtx') {
-      setState(() => tab = 4);
+      setState(() => tab = 3);
       txSheet();
     }
   }
@@ -945,6 +961,16 @@ class _H extends State<Home> with WidgetsBindingObserver {
                             prefs.setBool('jal', v);
                             set(() {});
                             setState(() {});
+                          }),
+                      SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('صدای محیط برنامه'),
+                          subtitle: const Text('صدای تیک‌زدن کار، افزودن و حذف'),
+                          value: prefs.getBool('sfx') ?? true,
+                          onChanged: (v) {
+                            prefs.setBool('sfx', v);
+                            set(() {});
+                            if (v) sfx('done');
                           }),
                       ListTile(
                           contentPadding: EdgeInsets.zero,
@@ -1040,6 +1066,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   // ── اهداف ──
   void delGoal(Map g) {
+    sfx('delete');
     final i = D.goals.indexOf(g);
     D.goals.remove(g);
     upd();
@@ -1140,13 +1167,14 @@ class _H extends State<Home> with WidgetsBindingObserver {
     g['progress'] = progress;
 
     if (o == null) {
+      sfx('add');
       D.goals.add(g);
     }
     await D.save();
     if (mounted) setState(() {});
   }
 
-  Widget goals() {
+  List<Widget> goalItems() {
     final now = DateTime.now();
     final list = List<Map>.from(D.goals)
       ..sort((a, b) {
@@ -1167,9 +1195,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       return '$days روز مانده';
     }
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
-      children: [
+    return [
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -1262,12 +1288,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
               ),
             ),
           ),
-      ],
-    );
+    ];
   }
 
   // ── کارها ──
   void delTask(Map k) {
+    sfx('delete');
     final i = D.tasks.indexOf(k);
     notif.cancel(taskNid(k['id'] as int));
     D.tasks.remove(k);
@@ -1281,6 +1307,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   void toggle(Map k) {
     final d = k['done'] == true;
+    if (!d) sfx('done');
     k['done'] = !d;
     k['doneAt'] = d ? null : ds(DateTime.now());
     if (d) {
@@ -1378,6 +1405,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     } else {
       k.remove('r');
     }
+    sfx('add');
     upd(); // اول ذخیره و نمایش؛ بعد زمان‌بندی اعلان
     await scheduleTask(k);
   }
@@ -1485,6 +1513,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   // ── برنامه‌ی هفتگی و تقویم ──
   void delEvent(Map e) {
+    sfx('delete');
     notif.cancel(eventNid(e['id'] as int));
     D.events.remove(e);
     upd();
@@ -1535,6 +1564,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       D.events.remove(o);
     }
     D.events.add(e);
+    sfx('add');
     upd(); // اول نمایش و ذخیره؛ بعد اعلان (خطای اعلان دیگر جلوی نمایش را نمی‌گیرد)
     await schedule(e);
   }
@@ -1615,6 +1645,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   // ── مالی ──
   void delTx(Map x) {
+    sfx('delete');
     final i = D.txs.indexOf(x);
     D.txs.remove(x);
     upd();
@@ -1725,6 +1756,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                           if (o != null) {
                             o.addAll(m);
                           } else {
+                            sfx('add');
                             D.txs.add({'id': DateTime.now().microsecondsSinceEpoch, ...m});
                           }
                           Navigator.pop(ctx);
@@ -1735,12 +1767,164 @@ class _H extends State<Home> with WidgetsBindingObserver {
             }));
   }
 
-  Widget money() {
+  // ── بازه‌های زمانی مالی بر اساس تقویم (شمسی یا میلادی) ──
+  DateTime _monthFirst(DateTime now, int back) {
+    if (jal) {
+      final j = g2j(now.year, now.month, now.day);
+      var y = j[0], m = j[1] - back;
+      while (m < 1) {
+        m += 12;
+        y--;
+      }
+      while (m > 12) {
+        m -= 12;
+        y++;
+      }
+      return jDate(y, m, 1);
+    }
+    return DateTime(now.year, now.month - back, 1);
+  }
+
+  String monthName(DateTime first) => jal ? jmn[g2j(first.year, first.month, first.day)[1] - 1] : gmn[first.month - 1];
+
+  String monthLabel(DateTime first) => jal ? '${monthName(first)} ${g2j(first.year, first.month, first.day)[0]}' : '${monthName(first)} ${first.year}';
+
+  DateTime weekStart(DateTime now, int back) => DateTime(now.year, now.month, now.day - ((now.weekday + 1) % 7) - 7 * back);
+
+  List<Map<String, dynamic>> periods() {
     final now = DateTime.now();
-    final wk = now.subtract(Duration(days: (now.weekday + 1) % 7));
+    final t = DateTime(now.year, now.month, now.day);
+    final w0 = weekStart(now, 0), w1 = weekStart(now, 1);
+    final cm0 = _monthFirst(now, 0), pm0 = _monthFirst(now, 1), nm0 = _monthFirst(now, -1);
+    return [
+      {'label': 'امروز', 'from': ds(t), 'to': ds(DateTime(t.year, t.month, t.day + 1))},
+      {'label': 'دیروز', 'from': ds(DateTime(t.year, t.month, t.day - 1)), 'to': ds(t)},
+      {'label': 'این هفته', 'from': ds(w0), 'to': ds(DateTime(w0.year, w0.month, w0.day + 7))},
+      {'label': 'هفته‌ی قبل', 'from': ds(w1), 'to': ds(w0)},
+      {'label': 'این ماه (${monthName(cm0)})', 'from': ds(cm0), 'to': ds(nm0), 'month': true},
+      {'label': 'ماه قبل (${monthName(pm0)})', 'from': ds(pm0), 'to': ds(cm0), 'month': true},
+    ];
+  }
+
+  Iterable<Map> inRange(String from, String to) => D.txs.where((x) {
+        final d = x['d'] as String;
+        return d.compareTo(from) >= 0 && d.compareTo(to) < 0;
+      });
+
+  int sumR(String from, String to, bool inc) => inRange(from, to).where((x) => (x['inc'] == true) == inc).fold<int>(0, (a, x) => a + (x['a'] as int));
+
+  Map<String, int> spentByCat(String from, String to) {
+    final r = <String, int>{};
+    for (final x in inRange(from, to).where((x) => x['inc'] != true)) {
+      r['${x['c']}'] = (r['${x['c']}'] ?? 0) + (x['a'] as int);
+    }
+    return r;
+  }
+
+  Widget budgetCard() {
+    final cs = Theme.of(context).colorScheme;
+    final p = periods()[4];
+    final spent = spentByCat(p['from'] as String, p['to'] as String);
+    final b = budgets;
+    final entries = b.entries.where((e) => e.value is num && (e.value as num) > 0).toList();
+    final totalB = entries.fold<num>(0, (a, e) => a + (e.value as num));
+    final totalS = entries.fold<int>(0, (a, e) => a + (spent[e.key] ?? 0));
+    return Card(
+        child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(Icons.savings_outlined, color: cs.primary),
+                const SizedBox(width: 8),
+                Expanded(child: Text('بودجه‌ی ${p['label']}', style: const TextStyle(fontWeight: FontWeight.bold))),
+                TextButton(onPressed: budgetSheet, child: Text(entries.isEmpty ? 'تعیین بودجه' : 'ویرایش')),
+              ]),
+              if (entries.isEmpty)
+                const Text('هنوز بودجه‌ای تعیین نکردی. برای هر دسته یه سقف ماهانه بذار تا میزان مصرفش رو همین‌جا ببینی.')
+              else ...[
+                Text('کل: ${n(totalS)} از ${n(totalB)}  •  ${totalB - totalS >= 0 ? 'باقی‌مانده ${n(totalB - totalS)}' : 'بیشتر از سقف ${n(totalS - totalB)}'}'),
+                for (final e in entries)
+                  Builder(builder: (_) {
+                    final bd = e.value as num, sp = spent[e.key] ?? 0, over = sp > bd;
+                    final ratio = bd > 0 ? (sp / bd).clamp(0.0, 1.0).toDouble() : 0.0;
+                    return Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Row(children: [Expanded(child: Text(e.key)), Text('${n(sp)} از ${n(bd)}')]),
+                          const SizedBox(height: 3),
+                          LinearProgressIndicator(
+                              minHeight: 8,
+                              borderRadius: BorderRadius.circular(8),
+                              value: ratio,
+                              color: over ? Colors.red : (ratio >= .8 ? Colors.orange : null)),
+                          Text(over ? 'بیشتر از سقف: ${n(sp - bd)}' : 'باقی‌مانده: ${n(bd - sp)}',
+                              style: TextStyle(fontSize: 11, color: over ? Colors.red : cs.outline)),
+                        ]));
+                  }),
+              ],
+            ])));
+  }
+
+  Future<void> historySheet() async {
+    var mode = 2; // 0 روز، 1 هفته، 2 ماه
+    await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => StatefulBuilder(builder: (ctx, set) {
+              final now = DateTime.now();
+              final rows = <List<String>>[]; // [عنوان، از، تا]
+              if (mode == 0) {
+                for (var i = 0; i < 31; i++) {
+                  final d = DateTime(now.year, now.month, now.day - i);
+                  rows.add([i == 0 ? 'امروز' : (i == 1 ? 'دیروز' : fdl(d)), ds(d), ds(DateTime(d.year, d.month, d.day + 1))]);
+                }
+              } else if (mode == 1) {
+                for (var i = 0; i < 12; i++) {
+                  final st = weekStart(now, i), en = DateTime(st.year, st.month, st.day + 7);
+                  final last = DateTime(st.year, st.month, st.day + 6);
+                  rows.add([(i == 0 ? 'این هفته: ' : (i == 1 ? 'هفته‌ی قبل: ' : '')) + '${fd(ds(st))} تا ${fd(ds(last))}', ds(st), ds(en)]);
+                }
+              } else {
+                for (var i = 0; i < 12; i++) {
+                  final f = _monthFirst(now, i), nx = _monthFirst(now, i - 1);
+                  rows.add([monthLabel(f), ds(f), ds(nx)]);
+                }
+              }
+              return SafeArea(
+                  child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        const Text('تاریخچه‌ی مالی', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 10),
+                        SegmentedButton<int>(
+                            segments: const [
+                              ButtonSegment(value: 0, label: Text('روزها')),
+                              ButtonSegment(value: 1, label: Text('هفته‌ها')),
+                              ButtonSegment(value: 2, label: Text('ماه‌ها')),
+                            ],
+                            selected: {mode},
+                            onSelectionChanged: (v) => set(() => mode = v.first)),
+                        const SizedBox(height: 8),
+                        Flexible(
+                            child: ListView(shrinkWrap: true, children: [
+                          for (final r in rows)
+                            Builder(builder: (_) {
+                              final inc = sumR(r[1], r[2], true), exp = sumR(r[1], r[2], false), net = inc - exp;
+                              final empty = inc == 0 && exp == 0;
+                              return ListTile(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(r[0], style: TextStyle(color: empty ? Theme.of(ctx).colorScheme.outline : null)),
+                                  subtitle: Text('درآمد ${n(inc)}  |  هزینه ${n(exp)}'),
+                                  trailing: Text(n(net), style: TextStyle(fontWeight: FontWeight.bold, color: empty ? null : (net >= 0 ? Colors.green : Colors.red))));
+                            }),
+                        ])),
+                      ])));
+            }));
+  }
+
+  Widget money() {
     int sum(Iterable<Map> l, bool inc) => l.where((x) => x['inc'] == inc).fold(0, (p, x) => p + (x['a'] as int));
-    Iterable<Map> since(String from) => D.txs.where((x) => (x['d'] as String).compareTo(from) >= 0);
-    final froms = {'امروز': ds(now), 'این هفته': ds(wk), 'این ماه': monthStart(now)};
     final found = D.txs.where((x) => '${x['t'] ?? ''} ${x['c']} ${x['note'] ?? ''}'.contains(q)).toList()
       ..sort((a, b) {
         final c = (b['d'] as String).compareTo(a['d']);
@@ -1748,21 +1932,27 @@ class _H extends State<Home> with WidgetsBindingObserver {
       });
     return ListView(padding: const EdgeInsets.all(12), children: [
       TextField(
-          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'جستجو در عنوان یا دسته'),
+          decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'جستجو در عنوان، توضیحات یا دسته'),
           onChanged: (v) => setState(() => q = v.trim())),
       Wrap(spacing: 8, children: [
         OutlinedButton.icon(icon: const Icon(Icons.bar_chart), label: const Text('گزارش نموداری'), onPressed: reportSheet),
-        OutlinedButton.icon(icon: const Icon(Icons.savings_outlined), label: const Text('بودجه‌ها'), onPressed: budgetSheet),
+        OutlinedButton.icon(icon: const Icon(Icons.history), label: const Text('تاریخچه'), onPressed: historySheet),
       ]),
       if (q.isNotEmpty)
         Card(child: ListTile(title: Text('${found.length} بار'), subtitle: Text('درآمد ${n(sum(found, true))}  |  هزینه ${n(sum(found, false))}')))
-      else
-        for (final f in froms.entries)
-          Card(
-              child: ListTile(
-                  title: Text(f.key),
-                  subtitle: Text('درآمد ${n(sum(since(f.value), true))}  |  هزینه ${n(sum(since(f.value), false))}'),
-                  trailing: Text(n(sum(since(f.value), true) - sum(since(f.value), false)), style: const TextStyle(fontWeight: FontWeight.bold)))),
+      else ...[
+        for (final p in periods())
+          Builder(builder: (_) {
+            final inc = sumR(p['from'] as String, p['to'] as String, true), exp = sumR(p['from'] as String, p['to'] as String, false);
+            return Card(
+                child: ListTile(
+                    dense: true,
+                    title: Text(p['label'] as String),
+                    subtitle: Text('درآمد ${n(inc)}  |  هزینه ${n(exp)}'),
+                    trailing: Text(n(inc - exp), style: const TextStyle(fontWeight: FontWeight.bold))));
+          }),
+        budgetCard(),
+      ],
       for (final x in found.take(q.isEmpty ? 30 : 500))
         Dismissible(
             key: ObjectKey(x),
@@ -1820,14 +2010,14 @@ class _H extends State<Home> with WidgetsBindingObserver {
   }
 
   Future<void> reportSheet() async {
-    var p = 2;
+    var p = 4;
     await showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         builder: (_) => StatefulBuilder(builder: (ctx, set) {
               final now = DateTime.now();
-              final from = [ds(now), ds(now.subtract(Duration(days: (now.weekday + 1) % 7))), monthStart(now)][p];
-              final l = D.txs.where((x) => (x['d'] as String).compareTo(from) >= 0).toList();
+              final pr = periods()[p];
+              final l = inRange(pr['from'] as String, pr['to'] as String).toList();
               int sm(bool inc) => l.where((x) => (x['inc'] == true) == inc).fold<int>(0, (a, x) => a + (x['a'] as int));
               final byCat = <String, int>{};
               for (final x in l.where((x) => x['inc'] != true)) {
@@ -1843,14 +2033,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                        SegmentedButton<int>(
-                            segments: const [
-                              ButtonSegment(value: 0, label: Text('امروز')),
-                              ButtonSegment(value: 1, label: Text('این هفته')),
-                              ButtonSegment(value: 2, label: Text('این ماه'))
-                            ],
-                            selected: {p},
-                            onSelectionChanged: (s) => set(() => p = s.first)),
+                        Wrap(spacing: 6, children: [
+                          for (var i = 0; i < 6; i++)
+                            ChoiceChip(label: Text(periods()[i]['label'] as String), selected: p == i, onSelected: (_) => set(() => p = i))
+                        ]),
                         const SizedBox(height: 12),
                         Text('درآمد ${n(sm(true))}   |   هزینه ${n(sm(false))}   |   مانده ${n(sm(true) - sm(false))}'),
                         const SizedBox(height: 12),
@@ -1858,7 +2044,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                         if (rows.isEmpty) const Text('هزینه‌ای ثبت نشده'),
                         for (final r in rows)
                           Builder(builder: (_) {
-                            final bd = p == 2 ? bg[r.key] as num? : null;
+                            final bd = pr['month'] == true ? bg[r.key] as num? : null;
                             return Padding(
                                 padding: const EdgeInsets.symmetric(vertical: 4),
                                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1998,6 +2184,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                         o['t'] = t.text.trim();
                         o['min'] = m.text.trim();
                       } else {
+                        sfx('add');
                         D.habits.add(<String, dynamic>{'id': DateTime.now().microsecondsSinceEpoch, 't': t.text.trim(), 'min': m.text.trim(), 'log': []});
                       }
                       Navigator.pop(ctx);
@@ -2008,11 +2195,11 @@ class _H extends State<Home> with WidgetsBindingObserver {
             ])));
   }
 
-  Widget habits() {
+  List<Widget> habitItems() {
     final now = DateTime.now(), today = ds(now);
     final days = [for (var i = 6; i >= 0; i--) DateTime(now.year, now.month, now.day - i)];
     final doneToday = D.habits.where((h) => hDone(h, today)).length;
-    return ListView(padding: const EdgeInsets.all(12), children: [
+    return [
       if (D.habits.isEmpty)
         const Padding(padding: EdgeInsets.all(24), child: Text('هنوز عادتی نداری. با + یک عادت کوچیک شروع کن؛ هرچی کوچیک‌تر، ماندگارتر.'))
       else
@@ -2037,32 +2224,71 @@ class _H extends State<Home> with WidgetsBindingObserver {
                       final l = h['log'] as List;
                       if (v == true) {
                         if (!l.contains(today)) l.add(today);
+                        sfx('done');
                       } else {
                         l.remove(today);
                       }
                       upd();
                     }))),
-      const SizedBox(height: 80),
-    ]);
+    ];
   }
+
+  Widget sectionHead(String title, IconData icon, VoidCallback onAdd) => Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+      child: Row(children: [
+        Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 8),
+        Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        const Spacer(),
+        TextButton.icon(onPressed: onAdd, icon: const Icon(Icons.add, size: 18), label: const Text('افزودن')),
+      ]));
+
+  // اهداف و عادت‌ها در یک صفحه
+  Widget plan() => ListView(padding: const EdgeInsets.fromLTRB(12, 4, 12, 90), children: [
+        sectionHead('اهداف', Icons.flag_outlined, () => goalSheet()),
+        ...goalItems(),
+        const SizedBox(height: 8),
+        const Divider(),
+        sectionHead('عادت‌ها', Icons.local_fire_department_outlined, () => habitSheet()),
+        ...habitItems(),
+      ]);
+
+  void addPlan() => showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+            ListTile(
+                leading: const Icon(Icons.flag_outlined),
+                title: const Text('هدف جدید'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  goalSheet();
+                }),
+            ListTile(
+                leading: const Icon(Icons.local_fire_department_outlined),
+                title: const Text('عادت جدید'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  habitSheet();
+                }),
+          ])));
 
   @override
   Widget build(BuildContext c) => Scaffold(
-        appBar: AppBar(title: Text(['کارها', 'تقویم', 'اهداف', 'عادت‌ها', 'مالی'][tab]), actions: [
+        appBar: AppBar(title: Text(['کارها', 'تقویم', 'اهداف و عادت‌ها', 'مالی'][tab]), actions: [
           IconButton(icon: const Icon(Icons.help_outline), tooltip: 'راهنما', onPressed: openGuide),
           IconButton(icon: const Icon(Icons.settings), tooltip: 'تنظیمات', onPressed: settings),
         ]),
-        body: [tasks, cal, goals, habits, money][tab](),
+        body: [tasks, cal, plan, money][tab](),
         floatingActionButton: FloatingActionButton(
-            onPressed: () => [() => taskSheet(), () => addEvent(), () => goalSheet(), () => habitSheet(), () => txSheet()][tab](), child: const Icon(Icons.add)),
+            onPressed: () => [() => taskSheet(), () => addEvent(), () => addPlan(), () => txSheet()][tab](), child: const Icon(Icons.add)),
         bottomNavigationBar: NavigationBar(
             selectedIndex: tab,
             onDestinationSelected: (i) => setState(() => tab = i),
             destinations: const [
               NavigationDestination(icon: Icon(Icons.checklist), label: 'کارها'),
               NavigationDestination(icon: Icon(Icons.calendar_month), label: 'تقویم'),
-              NavigationDestination(icon: Icon(Icons.flag_outlined), label: 'اهداف'),
-              NavigationDestination(icon: Icon(Icons.local_fire_department_outlined), label: 'عادت‌ها'),
+              NavigationDestination(icon: Icon(Icons.track_changes), label: 'اهداف و عادت'),
               NavigationDestination(icon: Icon(Icons.account_balance_wallet), label: 'مالی'),
             ]),
       );
