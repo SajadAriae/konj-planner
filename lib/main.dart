@@ -297,7 +297,7 @@ class D {
       if (raw == null || raw.isEmpty) return [];
       final decoded = jsonDecode(raw);
       if (decoded is! List) return [];
-      return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      return decoded.map<Map>((e) => Map<String, dynamic>.from(e as Map)).toList();
     } catch (_) {
       return [];
     }
@@ -358,6 +358,7 @@ class D {
         'txs': txs,
         'goals': goals,
         'habits': habits,
+        'budgets': prefs.getString('budgets') ?? '{}',
         'cats': cats,
         'clr': prefs.getInt('clr') ?? 0,
         'tm': prefs.getInt('tm') ?? 0,
@@ -377,6 +378,7 @@ class D {
       await prefs.setString('txs', jsonEncode(x));
       await prefs.setString('goals', jsonEncode(g));
       if (m['habits'] is List) await prefs.setString('habits', jsonEncode(m['habits']));
+      if (m['budgets'] is String) await prefs.setString('budgets', m['budgets']);
       if (m['cats'] is List) await prefs.setString('cats', jsonEncode(m['cats']));
       if (m['clr'] is int) await prefs.setInt('clr', m['clr']);
       if (m['tm'] is int) await prefs.setInt('tm', m['tm']);
@@ -1397,6 +1399,10 @@ class _H extends State<Home> {
     }
 
     return ListView(padding: const EdgeInsets.all(12), children: [
+      Wrap(spacing: 8, children: [
+        OutlinedButton.icon(icon: const Icon(Icons.bolt), label: const Text('حداقل روز'), onPressed: minimalDay),
+        OutlinedButton.icon(icon: const Icon(Icons.insights), label: const Text('بازبینی هفته'), onPressed: weekReview),
+      ]),
       for (final e in ev)
         Card(child: ListTile(leading: const Icon(Icons.schedule), title: Text(e['t']), subtitle: Text('${hm(e['s'])} – ${hm(e['e'])}'))),
       const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('نیاز به انجام', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -1682,6 +1688,10 @@ class _H extends State<Home> {
       TextField(
           decoration: const InputDecoration(prefixIcon: Icon(Icons.search), hintText: 'جستجو در عنوان یا دسته'),
           onChanged: (v) => setState(() => q = v.trim())),
+      Wrap(spacing: 8, children: [
+        OutlinedButton.icon(icon: const Icon(Icons.bar_chart), label: const Text('گزارش نموداری'), onPressed: reportSheet),
+        OutlinedButton.icon(icon: const Icon(Icons.savings_outlined), label: const Text('بودجه‌ها'), onPressed: budgetSheet),
+      ]),
       if (q.isNotEmpty)
         Card(child: ListTile(title: Text('${found.length} بار'), subtitle: Text('درآمد ${n(sum(found, true))}  |  هزینه ${n(sum(found, false))}')))
       else
@@ -1708,6 +1718,181 @@ class _H extends State<Home> {
                 ]))),
       const SizedBox(height: 80),
     ]);
+  }
+
+  Map<String, dynamic> get budgets {
+    try {
+      return Map<String, dynamic>.from(jsonDecode(prefs.getString('budgets') ?? '{}') as Map);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> budgetSheet() async {
+    final b = budgets;
+    final ctl = {for (final k in D.cats) k: TextEditingController(text: b[k] != null ? n(b[k] as num) : '')};
+    await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+            child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Text('بودجه‌ی ماهانه‌ی هر دسته (تومان؛ خالی = بدون سقف)', style: TextStyle(fontWeight: FontWeight.bold)),
+              for (final k in D.cats)
+                TextField(controller: ctl[k], keyboardType: TextInputType.number, inputFormatters: [ThousandFmt()], decoration: InputDecoration(labelText: k)),
+              const SizedBox(height: 8),
+              FilledButton(
+                  onPressed: () {
+                    final r = <String, dynamic>{};
+                    ctl.forEach((k, c) {
+                      final v = int.tryParse(en(c.text));
+                      if (v != null && v > 0) r[k] = v;
+                    });
+                    prefs.setString('budgets', jsonEncode(r));
+                    Navigator.pop(ctx);
+                    setState(() {});
+                  },
+                  child: const Text('ذخیره')),
+            ]))));
+  }
+
+  Future<void> reportSheet() async {
+    var p = 2;
+    await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => StatefulBuilder(builder: (ctx, set) {
+              final now = DateTime.now();
+              final from = [ds(now), ds(now.subtract(Duration(days: (now.weekday + 1) % 7))), monthStart(now)][p];
+              final l = D.txs.where((x) => (x['d'] as String).compareTo(from) >= 0).toList();
+              int sm(bool inc) => l.where((x) => (x['inc'] == true) == inc).fold<int>(0, (a, x) => a + (x['a'] as int));
+              final byCat = <String, int>{};
+              for (final x in l.where((x) => x['inc'] != true)) {
+                byCat['${x['c']}'] = (byCat['${x['c']}'] ?? 0) + (x['a'] as int);
+              }
+              final rows = byCat.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+              final top = rows.isEmpty ? 1 : rows.first.value;
+              final bg = budgets;
+              final days = [for (var i = 6; i >= 0; i--) DateTime(now.year, now.month, now.day - i)];
+              final dv = [for (final d in days) D.txs.where((x) => x['inc'] != true && x['d'] == ds(d)).fold<int>(0, (a, x) => a + (x['a'] as int))];
+              final mx = dv.fold<int>(1, (a, v) => v > a ? v : a);
+              return SingleChildScrollView(
+                  child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                        SegmentedButton<int>(
+                            segments: const [
+                              ButtonSegment(value: 0, label: Text('امروز')),
+                              ButtonSegment(value: 1, label: Text('این هفته')),
+                              ButtonSegment(value: 2, label: Text('این ماه'))
+                            ],
+                            selected: {p},
+                            onSelectionChanged: (s) => set(() => p = s.first)),
+                        const SizedBox(height: 12),
+                        Text('درآمد ${n(sm(true))}   |   هزینه ${n(sm(false))}   |   مانده ${n(sm(true) - sm(false))}'),
+                        const SizedBox(height: 12),
+                        const Text('هزینه بر اساس دسته', style: TextStyle(fontWeight: FontWeight.bold)),
+                        if (rows.isEmpty) const Text('هزینه‌ای ثبت نشده'),
+                        for (final r in rows)
+                          Builder(builder: (_) {
+                            final bd = p == 2 ? bg[r.key] as num? : null;
+                            return Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 4),
+                                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Row(children: [Expanded(child: Text(r.key)), Text(bd != null ? '${n(r.value)} از ${n(bd)}' : n(r.value))]),
+                                  LinearProgressIndicator(
+                                      minHeight: 8,
+                                      value: bd != null ? (r.value / bd).clamp(0.0, 1.0).toDouble() : r.value / top,
+                                      color: bd != null && r.value > bd ? Colors.red : null),
+                                ]));
+                          }),
+                        const SizedBox(height: 16),
+                        const Text('هزینه‌ی ۷ روز اخیر', style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                            height: 90,
+                            child: Row(crossAxisAlignment: CrossAxisAlignment.end, mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                              for (var i = 0; i < 7; i++)
+                                Container(
+                                    width: 18,
+                                    height: 6 + 70.0 * dv[i] / mx,
+                                    decoration: BoxDecoration(color: Theme.of(ctx).colorScheme.primary, borderRadius: BorderRadius.circular(4)))
+                            ])),
+                        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                          for (final d in days) Text('${jal ? g2j(d.year, d.month, d.day)[2] : d.day}', style: const TextStyle(fontSize: 11))
+                        ]),
+                      ])));
+            }));
+  }
+
+  void minimalDay() {
+    final open = D.tasks.where((k) => k['done'] != true).toList()
+      ..sort((a, b) {
+        final s = (b['star'] == true ? 1 : 0) - (a['star'] == true ? 1 : 0);
+        return s != 0 ? s : ((a['r'] ?? '9') as String).compareTo((b['r'] ?? '9') as String);
+      });
+    showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('حداقل روز'),
+              content: Text(open.isEmpty
+                  ? 'کار بازی نداری؛ امروز رو موفق حساب کن.'
+                  : 'امروز فقط همین یک کار، ۱۰ دقیقه:\n\n${open.first['t']}\n\nفقط شروعش کن. همین کافیه که امروز حساب بشه.'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('بعداً')),
+                if (open.isNotEmpty)
+                  FilledButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        toggle(open.first);
+                      },
+                      child: const Text('انجامش دادم')),
+              ],
+            ));
+  }
+
+  void weekReview() {
+    final now = DateTime.now();
+    final from = ds(DateTime(now.year, now.month, now.day - 6));
+    final dn = D.tasks.where((k) => k['done'] == true && ((k['doneAt'] ?? '') as String).compareTo(from) >= 0).length;
+    final od = D.tasks.where((k) {
+      if (k['done'] == true || k['r'] == null) return false;
+      try {
+        return DateTime.parse(k['r']).isBefore(now);
+      } catch (_) {
+        return false;
+      }
+    }).toList();
+    final hb = D.habits.isEmpty
+        ? 0
+        : D.habits.fold<int>(0, (a, h) => a + (h['log'] as List).where((d) => '$d'.compareTo(from) >= 0).length) * 100 ~/ (D.habits.length * 7);
+    final spent = D.txs.where((x) => x['inc'] != true && (x['d'] as String).compareTo(from) >= 0).fold<int>(0, (a, x) => a + (x['a'] as int));
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => SingleChildScrollView(
+            child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                  const Text('بازبینی ۷ روز اخیر', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 8),
+                  Text('کار انجام‌شده: $dn   |   عقب‌افتاده: ${od.length}'),
+                  Text('پایبندی به عادت‌ها: $hb٪'),
+                  Text('هزینه‌ی هفته: ${n(spent)}'),
+                  const SizedBox(height: 12),
+                  if (od.isNotEmpty) const Text('عقب‌افتاده‌ها؛ کدوم رو دیگه لازم نداری؟'),
+                  for (final k in od)
+                    ListTile(
+                        dense: true,
+                        title: Text(k['t']),
+                        trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () {
+                              Navigator.pop(ctx);
+                              delTask(k);
+                            })),
+                ]))));
   }
 
   bool hDone(Map h, String d) => (h['log'] as List).contains(d);
@@ -1751,7 +1936,7 @@ class _H extends State<Home> {
                         o['t'] = t.text.trim();
                         o['min'] = m.text.trim();
                       } else {
-                        D.habits.add({'id': DateTime.now().microsecondsSinceEpoch, 't': t.text.trim(), 'min': m.text.trim(), 'log': []});
+                        D.habits.add(<String, dynamic>{'id': DateTime.now().microsecondsSinceEpoch, 't': t.text.trim(), 'min': m.text.trim(), 'log': []});
                       }
                       Navigator.pop(ctx);
                       upd();
