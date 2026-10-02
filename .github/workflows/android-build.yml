@@ -44,33 +44,44 @@ jobs:
       - name: Install Konj Android widget files
         run: |
           set -e
+          K=android/app/src/main/kotlin/com/konj/planner
+          R=android/app/src/main/res
+          mkdir -p $K $R/layout $R/xml $R/drawable
 
-          mkdir -p android/app/src/main/kotlin/com/konj/planner
-          mkdir -p android/app/src/main/res/layout
-          mkdir -p android/app/src/main/res/xml
-          mkdir -p android/app/src/main/res/drawable
+          # فایل را با نام در کل ریپو پیدا می‌کند (حتی اگر پوشه‌ها موقع آپلود صاف شده باشند)
+          find_one() {
+            find . -path ./android -prune -o -type f -name "$1" -print \
+              | awk '{print (/widget_android/ ? 0 : 1) " " $0}' | sort | head -n1 | cut -d' ' -f2-
+          }
+          put() {
+            src=$(find_one "$1")
+            if [ -z "$src" ]; then echo "ERROR: $1 not found in repository"; exit 1; fi
+            echo "$1 <= $src"
+            cp "$src" "$2/"
+          }
 
-          cp widget_android/kotlin/com/konj/planner/*.kt \
-            android/app/src/main/kotlin/com/konj/planner/
-
-          cp widget_android/res/layout/*.xml \
-            android/app/src/main/res/layout/
-
-          cp widget_android/res/xml/konj_planner_widget_info.xml \
-            android/app/src/main/res/xml/
-
-          cp widget_android/res/drawable/konj_widget_bg.xml \
-            android/app/src/main/res/drawable/
+          put KonjPlannerWidgetProvider.kt $K
+          put KonjWidgetService.kt $K
+          put ShakeService.kt $K
+          put MainActivity.kt $K
+          put konj_planner_widget.xml $R/layout
+          put konj_widget_item.xml $R/layout
+          put konj_planner_widget_info.xml $R/xml
+          put konj_widget_bg.xml $R/drawable
 
           # Use the repository logo as the launcher icon when available.
           if [ -f logo.png ]; then
-            cp logo.png android/app/src/main/res/drawable/konj_logo.png
+            cp logo.png $R/drawable/konj_logo.png
           fi
 
       - name: Install notification sound
         run: |
+          set -e
           mkdir -p android/app/src/main/res/raw
-          cp assets/sounds/konj_notify.wav android/app/src/main/res/raw/konj_notify.wav
+          src=$(find . -path ./android -prune -o -type f -name konj_notify.wav -print | head -n1)
+          if [ -z "$src" ]; then echo "ERROR: konj_notify.wav not found"; exit 1; fi
+          cp "$src" android/app/src/main/res/raw/konj_notify.wav
+
 
       - name: Add notification icon
         run: |
@@ -108,14 +119,20 @@ jobs:
 
           if "isCoreLibraryDesugaringEnabled = true" not in text:
               marker = "android {"
-              block = """ compileOptions { sourceCompatibility = JavaVersion.VERSION_17 targetCompatibility = JavaVersion.VERSION_17 isCoreLibraryDesugaringEnabled = true } """
+              block = """
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+                  isCoreLibraryDesugaringEnabled = true
+              }
+              """
               if marker not in text:
                   raise SystemExit("android block not found")
               text = text.replace(marker, marker + block, 1)
 
           dep = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
           if "desugar_jdk_libs" not in text:
-              text += "\n\ndependencies {\n " + dep + "\n}\n"
+              text += "\n\ndependencies {\n    " + dep + "\n}\n"
 
           path.write_text(text, encoding="utf-8")
 
@@ -130,42 +147,42 @@ jobs:
               m = m.replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/konj_logo"', 1)
 
           receiver = (
-              "\n <receiver"
-              "\n android:name=\".KonjPlannerWidgetProvider\""
-              "\n android:exported=\"true\">"
-              "\n <intent-filter>"
-              "\n <action android:name=\"android.appwidget.action.APPWIDGET_UPDATE\" />"
-              "\n </intent-filter>"
-              "\n <meta-data"
-              "\n android:name=\"android.appwidget.provider\""
-              "\n android:resource=\"@xml/konj_planner_widget_info\" />"
-              "\n </receiver>"
+              "\n        <receiver"
+              "\n            android:name=\".KonjPlannerWidgetProvider\""
+              "\n            android:exported=\"true\">"
+              "\n            <intent-filter>"
+              "\n                <action android:name=\"android.appwidget.action.APPWIDGET_UPDATE\" />"
+              "\n            </intent-filter>"
+              "\n            <meta-data"
+              "\n                android:name=\"android.appwidget.provider\""
+              "\n                android:resource=\"@xml/konj_planner_widget_info\" />"
+              "\n        </receiver>"
           )
 
           if "KonjPlannerWidgetProvider" not in m:
-              m = m.replace(" </application>", receiver + "\n </application>", 1)
+              m = m.replace("    </application>", receiver + "\n    </application>", 1)
 
           import re
-          perm = ''.join('\n <uses-permission android:name="android.permission.%s"/>' % p for p in ['POST_NOTIFICATIONS', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM', 'RECEIVE_BOOT_COMPLETED', 'WAKE_LOCK', 'VIBRATE'])
+          perm = ''.join('\n    <uses-permission android:name="android.permission.%s"/>' % p for p in ['POST_NOTIFICATIONS', 'SCHEDULE_EXACT_ALARM', 'USE_EXACT_ALARM', 'RECEIVE_BOOT_COMPLETED', 'WAKE_LOCK', 'VIBRATE'])
           if 'USE_EXACT_ALARM' not in m:
               m = re.sub(r'(<manifest[^>]*>)', lambda x: x.group(1) + perm, m, count=1)
-          nrecv = ('\n <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />'
-                   '\n <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">'
-                   '\n <intent-filter>'
-                   '\n <action android:name="android.intent.action.BOOT_COMPLETED" />'
-                   '\n <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />'
-                   '\n </intent-filter>'
-                   '\n </receiver>')
+          nrecv = ('\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />'
+                   '\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">'
+                   '\n            <intent-filter>'
+                   '\n                <action android:name="android.intent.action.BOOT_COMPLETED" />'
+                   '\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />'
+                   '\n            </intent-filter>'
+                   '\n        </receiver>')
           if 'ScheduledNotificationReceiver' not in m:
-              m = m.replace(' </application>', nrecv + '\n </application>', 1)
-          hw = ('\n <receiver android:name="es.antonborri.home_widget.HomeWidgetBackgroundReceiver" android:exported="true">'
-                '\n <intent-filter>'
-                '\n <action android:name="es.antonborri.home_widget.action.BACKGROUND" />'
-                '\n </intent-filter>'
-                '\n </receiver>'
-                '\n <service android:name="es.antonborri.home_widget.HomeWidgetBackgroundService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />')
+              m = m.replace('    </application>', nrecv + '\n    </application>', 1)
+          hw = ('\n        <receiver android:name="es.antonborri.home_widget.HomeWidgetBackgroundReceiver" android:exported="true">'
+                '\n            <intent-filter>'
+                '\n                <action android:name="es.antonborri.home_widget.action.BACKGROUND" />'
+                '\n            </intent-filter>'
+                '\n        </receiver>'
+                '\n        <service android:name="es.antonborri.home_widget.HomeWidgetBackgroundService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />')
           if 'HomeWidgetBackgroundReceiver' not in m:
-              m = m.replace(' </application>', hw + '\n </application>', 1)
+              m = m.replace('    </application>', hw + '\n    </application>', 1)
           manifest.write_text(m, encoding="utf-8")
 
           print("ANDROID CONFIGURATION READY")
@@ -181,17 +198,17 @@ jobs:
           manifest = Path("android/app/src/main/AndroidManifest.xml")
           m = manifest.read_text(encoding="utf-8")
           perms = ["FOREGROUND_SERVICE", "FOREGROUND_SERVICE_SPECIAL_USE", "SYSTEM_ALERT_WINDOW", "USE_FULL_SCREEN_INTENT"]
-          add = ''.join('\n <uses-permission android:name="android.permission.%s"/>' % p for p in perms if p not in m)
+          add = ''.join('\n    <uses-permission android:name="android.permission.%s"/>' % p for p in perms if p not in m)
           if add:
               m = re.sub(r'(<manifest[^>]*>)', lambda x: x.group(1) + add, m, count=1)
           comps = (
-              '\n <service android:name=".KonjWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS" android:exported="false" />'
-              '\n <service android:name=".ShakeService" android:exported="false" android:foregroundServiceType="specialUse">'
-              '\n <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="shake_to_open_app" />'
-              '\n </service>'
+              '\n        <service android:name=".KonjWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS" android:exported="false" />'
+              '\n        <service android:name=".ShakeService" android:exported="false" android:foregroundServiceType="specialUse">'
+              '\n            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="shake_to_open_app" />'
+              '\n        </service>'
           )
           if "ShakeService" not in m:
-              m = m.replace(" </application>", comps + "\n </application>", 1)
+              m = m.replace("    </application>", comps + "\n    </application>", 1)
           manifest.write_text(m, encoding="utf-8")
           print(m)
           PY
@@ -226,16 +243,16 @@ jobs:
           s = p.read_text(encoding="utf-8")
 
           if 'create("konjRelease")' not in s:
-              marker = " buildTypes {"
+              marker = "    buildTypes {"
               lines = [
-                  " signingConfigs {",
-                  " create(\"konjRelease\") {",
-                  " storeFile = file(\"../konj-release.jks\")",
-                  " storePassword = System.getenv(\"KEYSTORE_PASSWORD\")",
-                  " keyAlias = System.getenv(\"KEY_ALIAS\")",
-                  " keyPassword = System.getenv(\"KEY_PASSWORD\")",
-                  " }",
-                  " }",
+                  "    signingConfigs {",
+                  "        create(\"konjRelease\") {",
+                  "            storeFile = file(\"../konj-release.jks\")",
+                  "            storePassword = System.getenv(\"KEYSTORE_PASSWORD\")",
+                  "            keyAlias = System.getenv(\"KEY_ALIAS\")",
+                  "            keyPassword = System.getenv(\"KEY_PASSWORD\")",
+                  "        }",
+                  "    }",
                   "",
               ]
               signing = "\n".join(lines) + "\n"
@@ -245,7 +262,7 @@ jobs:
 
           s = s.replace(
               'signingConfig = signingConfigs.getByName("debug")',
-              'signingConfig = signingConfigs.getByName("konjRelease")\n isMinifyEnabled = false\n isShrinkResources = false',
+              'signingConfig = signingConfigs.getByName("konjRelease")\n            isMinifyEnabled = false\n            isShrinkResources = false',
               1,
           )
 
