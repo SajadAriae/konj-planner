@@ -44,33 +44,44 @@ jobs:
       - name: Install Konj Android widget files
         run: |
           set -e
+          K=android/app/src/main/kotlin/com/konj/planner
+          R=android/app/src/main/res
+          mkdir -p $K $R/layout $R/xml $R/drawable
 
-          mkdir -p android/app/src/main/kotlin/com/konj/planner
-          mkdir -p android/app/src/main/res/layout
-          mkdir -p android/app/src/main/res/xml
-          mkdir -p android/app/src/main/res/drawable
+          # فایل را با نام در کل ریپو پیدا می‌کند (حتی اگر پوشه‌ها موقع آپلود صاف شده باشند)
+          find_one() {
+            find . -path ./android -prune -o -type f -name "$1" -print \
+              | awk '{print (/widget_android/ ? 0 : 1) " " $0}' | sort | head -n1 | cut -d' ' -f2-
+          }
+          put() {
+            src=$(find_one "$1")
+            if [ -z "$src" ]; then echo "ERROR: $1 not found in repository"; exit 1; fi
+            echo "$1 <= $src"
+            cp "$src" "$2/"
+          }
 
-          cp widget_android/kotlin/com/konj/planner/*.kt \
-            android/app/src/main/kotlin/com/konj/planner/
-
-          cp widget_android/res/layout/*.xml \
-            android/app/src/main/res/layout/
-
-          cp widget_android/res/xml/konj_planner_widget_info.xml \
-            android/app/src/main/res/xml/
-
-          cp widget_android/res/drawable/konj_widget_bg.xml \
-            android/app/src/main/res/drawable/
+          put KonjPlannerWidgetProvider.kt $K
+          put KonjWidgetService.kt $K
+          put ShakeService.kt $K
+          put MainActivity.kt $K
+          put konj_planner_widget.xml $R/layout
+          put konj_widget_item.xml $R/layout
+          put konj_planner_widget_info.xml $R/xml
+          put konj_widget_bg.xml $R/drawable
 
           # Use the repository logo as the launcher icon when available.
           if [ -f logo.png ]; then
-            cp logo.png android/app/src/main/res/drawable/konj_logo.png
+            cp logo.png $R/drawable/konj_logo.png
           fi
 
       - name: Install notification sound
         run: |
+          set -e
           mkdir -p android/app/src/main/res/raw
-          cp assets/sounds/konj_notify.wav android/app/src/main/res/raw/konj_notify.wav
+          src=$(find . -path ./android -prune -o -type f -name konj_notify.wav -print | head -n1)
+          if [ -z "$src" ]; then echo "ERROR: konj_notify.wav not found"; exit 1; fi
+          cp "$src" android/app/src/main/res/raw/konj_notify.wav
+
 
       - name: Add notification icon
         run: |
