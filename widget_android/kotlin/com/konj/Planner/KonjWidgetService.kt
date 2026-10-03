@@ -37,7 +37,8 @@ class KonjWidgetService : RemoteViewsService() {
             val id = o.optString("id")
             val done = o.optBoolean("d", false)
             val isHabit = kind == "h"
-            v.setTextViewText(R.id.item_icon, if (isHabit) (if (done) "鉁�" else "馃敟") else "鈽�")
+            val ic = o.optString("i", "")
+            v.setTextViewText(R.id.item_icon, if (ic.isNotEmpty()) ic else if (isHabit) (if (done) "\u2705" else "\uD83D\uDD25") else "\u2610")
             v.setTextViewText(R.id.item_text, o.optString("t"))
             v.setTextColor(R.id.item_text, if (done) Color.parseColor("#99FFFFFF") else Color.WHITE)
             v.setTextColor(R.id.item_icon, if (isHabit) acc else Color.WHITE)
