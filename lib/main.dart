@@ -1407,26 +1407,55 @@ class CatchGame extends StatefulWidget {
 }
 
 class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMixin {
+  static const total = 25.0;
+  static const maxPlays = 2;
+  static const foods = ['🍎', '🐟', '🍖', '🍪', '🥚', '🍰'];
   late final Ticker _tk;
   Duration _last = Duration.zero;
   final _rnd = math.Random();
   final items = <_Fall>[];
-  double px = .5, left = 25, spawn = .4, faceT = 0;
-  int score = 0, lives = 3;
-  bool over = false, started = false;
+  double px = .5, left = total, spawn = .5, faceT = 0, _h = 700;
+  int score = 0, lives = 3, combo = 0;
+  bool over = false, started = false, ready = false;
   String result = '', face = 'idle';
-  static const total = 25.0;
+
+  String get _key => 'mg:${ds(DateTime.now())}';
+  int get plays => prefs.getInt(_key) ?? 0;
 
   @override
   void initState() {
     super.initState();
     _tk = createTicker(_tick)..start();
+    _prep();
+  }
+
+  // تصویرهای پیکسلی از قبل ساخته می‌شن تا موقع شروع بازی چیزی خالی یا پرش‌دار نباشه
+  Future<void> _prep() async {
+    try {
+      await Future.wait([for (final e in [...foods, '💣']) pixelEmoji(e)]).timeout(const Duration(seconds: 5));
+    } catch (_) {}
+    if (mounted) setState(() => ready = true);
   }
 
   @override
   void dispose() {
     _tk.dispose();
     super.dispose();
+  }
+
+  void _start() {
+    if (!ready || plays >= maxPlays) return;
+    prefs.setInt(_key, plays + 1);
+    setState(() {
+      started = true;
+      over = false;
+      items.clear();
+      score = 0;
+      lives = 3;
+      combo = 0;
+      left = total;
+      spawn = .5;
+    });
   }
 
   void _tick(Duration d) {
@@ -1437,33 +1466,37 @@ class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMix
     spawn -= dt;
     faceT -= dt;
     if (faceT <= 0) face = 'idle';
+    final prog = (total - left) / total;
     if (spawn <= 0) {
-      spawn = math.max(.28, .6 - (total - left) / total * .3);
+      spawn = math.max(.3, .65 - prog * .3);
       final bad = _rnd.nextDouble() < .2;
-      const foods = ['🍎', '🐟', '🍖', '🍪', '🥚', '🍰'];
       final fi = _rnd.nextInt(foods.length);
-      items.add(_Fall(.08 + _rnd.nextDouble() * .84, -.06, .38 + _rnd.nextDouble() * .2 + (total - left) / total * .25, bad ? '💣' : foods[fi], bad ? 0 : (fi == 5 ? 3 : 1), bad));
+      items.add(_Fall(.1 + _rnd.nextDouble() * .8, -.05, .36 + _rnd.nextDouble() * .18 + prog * .22, bad ? '💣' : foods[fi], bad ? 0 : (fi == 5 ? 3 : 1), bad));
     }
     for (final it in items) {
       it.y += it.v * dt;
     }
+    final z0 = (_h * .8 + 10 - 120 + 15) / _h, z1 = z0 + 70 / _h;
     items.removeWhere((it) {
-      if (it.y > .62 && it.y < .8 && (it.x - px).abs() < .14) {
+      if (it.y > z0 && it.y < z1 && (it.x - px).abs() < .15) {
         if (it.bad) {
           lives--;
+          combo = 0;
           face = 'sad';
           sfx('delete');
         } else {
-          score += it.pts;
+          combo++;
+          score += it.pts + (combo % 5 == 0 ? 2 : 0);
           face = 'happy';
           sfx('munch');
         }
-        faceT = .5;
+        faceT = .45;
         return true;
       }
       return it.y > 1.05;
     });
     if (left <= 0 || lives <= 0) {
+      left = math.max(0, left);
       over = true;
       _finish();
     }
@@ -1471,64 +1504,80 @@ class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMix
   }
 
   void _finish() {
-    final key = 'mg:${ds(DateTime.now())}';
-    final plays = prefs.getInt(key) ?? 0;
-    if (plays >= 3) {
-      result = 'امتیاز $score\nسقف جایزه‌ی امروز (۳ بار) پر شده؛ فردا دوباره بیا!';
-    } else if (score > 0) {
-      prefs.setInt(key, plays + 1);
+    if (score > 0) {
       final c = math.min(25, score);
-      result = 'امتیاز $score\nجایزه: $c سکه 🪙';
+      result = 'امتیاز: $score\nجایزه: $c سکه 🪙';
       Gm.earn(c, (score / 2).round());
     } else {
-      result = 'امتیاز $score';
+      result = 'امتیاز: $score\nاین بار نشد؛ دفعه‌ی بعد!';
     }
+    final rest = maxPlays - plays;
+    result += rest > 0 ? '\n$rest بار دیگه امروز می‌تونی بازی کنی.' : '\nسهم امروزت تموم شد؛ فردا دوباره بیا 🌙';
     sfx(score > 10 ? 'hatch' : 'done');
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-      body: LayoutBuilder(builder: (c, cons) {
-        final W = cons.maxWidth, H = cons.maxHeight;
-        return GestureDetector(
-            onHorizontalDragUpdate: (d) => setState(() => px = (px + d.delta.dx / W).clamp(.1, .9).toDouble()),
-            child: Stack(children: [
-              Positioned.fill(child: CustomPaint(painter: ScenePainter(Gm.bg, isNight(), seasonNow(), const AlwaysStoppedAnimation<double>(0)))),
-              for (final it in items) Positioned(left: it.x * W - 20, top: it.y * H - 20, width: 40, height: 40, child: PxEmoji(it.e, 40)),
-              Positioned(left: px * W - 60, top: H * .8 - 112, width: 120, height: 120, child: petCanvas(widget.hero, size: 120, face: face)),
-              SafeArea(
-                  child: Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Row(children: [
-                        IconButton(icon: const Icon(Icons.close), color: Colors.white, onPressed: () => Navigator.pop(context)),
-                        Expanded(child: Text('امتیاز: $score', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 4)]))),
-                        Text('❤️' * lives, style: const TextStyle(fontSize: 18)),
-                        const SizedBox(width: 12),
-                        Text('${left.ceil().clamp(0, 99)}s', style: const TextStyle(color: Colors.white, fontSize: 18, shadows: [Shadow(blurRadius: 4)])),
-                        const SizedBox(width: 8),
-                      ]))),
-              if (!started || over)
-                Center(
-                    child: Card(
-                        child: Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(mainAxisSize: MainAxisSize.min, children: [
-                              Text(over ? 'بازی تموم شد' : 'گرفتن غذا 🍖', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                              const SizedBox(height: 8),
-                              Text(over ? result : 'پتت رو با انگشت چپ و راست ببر و غذاها رو بگیر.\nاز 💣 دوری کن! ۳ جون داری.\nروزی ۳ بار جایزه‌ی سکه داره.', textAlign: TextAlign.center),
-                              const SizedBox(height: 12),
-                              FilledButton(
-                                  onPressed: () {
-                                    if (over) {
-                                      Navigator.pop(context);
-                                    } else {
-                                      setState(() => started = true);
-                                    }
-                                  },
-                                  child: Text(over ? 'بستن' : 'شروع')),
-                            ])))),
-            ]));
-      }));
+  Widget build(BuildContext context) {
+    final locked = plays >= maxPlays && !started;
+    return Scaffold(
+        backgroundColor: Colors.black,
+        body: LayoutBuilder(builder: (c, cons) {
+          final W = cons.maxWidth, H = cons.maxHeight;
+          _h = H;
+          return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragUpdate: (d) => setState(() => px = (px + d.delta.dx / W).clamp(.1, .9).toDouble()),
+              child: SizedBox(
+                  width: W,
+                  height: H,
+                  child: Stack(fit: StackFit.expand, clipBehavior: Clip.hardEdge, children: [
+                    Positioned.fill(child: RepaintBoundary(child: CustomPaint(painter: ScenePainter(Gm.bg, isNight(), seasonNow(), const AlwaysStoppedAnimation<double>(0))))),
+                    for (final it in items) Positioned(left: it.x * W - 20, top: it.y * H - 20, width: 40, height: 40, child: PxEmoji(it.e, 40)),
+                    Positioned(left: px * W - 60, bottom: H * .2 - 10, width: 120, height: 120, child: petCanvas(widget.hero, size: 120, face: face)),
+                    Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: SafeArea(
+                            child: Padding(
+                                padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                                child: Column(children: [
+                                  Row(children: [
+                                    IconButton(icon: const Icon(Icons.close), color: Colors.white, onPressed: () => Navigator.pop(context)),
+                                    Expanded(child: Text('امتیاز: $score', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 4)]))),
+                                    Text('❤️' * lives, style: const TextStyle(fontSize: 18)),
+                                    const SizedBox(width: 12),
+                                    Text('${left.ceil()}s', style: const TextStyle(color: Colors.white, fontSize: 18, shadows: [Shadow(blurRadius: 4)])),
+                                    const SizedBox(width: 8),
+                                  ]),
+                                  if (started && !over) LinearProgressIndicator(value: (left / total).clamp(0.0, 1.0).toDouble(), minHeight: 5, borderRadius: BorderRadius.circular(5)),
+                                ])))),
+                    if (!started || over)
+                      Center(
+                          child: Card(
+                              margin: const EdgeInsets.all(24),
+                              child: Padding(
+                                  padding: const EdgeInsets.all(20),
+                                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                                    Text(over ? 'بازی تموم شد' : 'گرفتن غذا 🍖', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                        over
+                                            ? result
+                                            : (locked
+                                                ? 'امروز $maxPlays بار بازی کردی و سهمت تموم شده.\nفردا دوباره بیا 🌙'
+                                                : 'پتت رو با انگشت چپ و راست ببر و غذاها رو بگیر.\nاز 💣 دوری کن! ۳ جون داری.\nهر ۵ غذای پشت‌سرهم، امتیاز اضافه داره.\nروزی فقط $maxPlays بار می‌تونی بازی کنی (${maxPlays - plays} بار مونده).'),
+                                        textAlign: TextAlign.center),
+                                    const SizedBox(height: 12),
+                                    FilledButton(
+                                        onPressed: over || locked
+                                            ? () => Navigator.pop(context)
+                                            : (ready ? _start : null),
+                                        child: Text(over || locked ? 'بستن' : (ready ? 'شروع' : 'در حال آماده‌سازی…'))),
+                                  ])))),
+                  ])));
+        }));
+  }
 }
 
 final checkinReq = ValueNotifier<int>(0);
@@ -2282,7 +2331,7 @@ const _pages = [
   _GP(Icons.account_balance_wallet, 'مالی',
       '• با + هزینه یا درآمد ثبت کن. مبلغ خودش هر سه رقم با نقطه جدا می‌شه تا خوندنش راحت باشه.\n• دسته رو انتخاب کن؛ با «مدیریت دسته‌ها» خودت دسته اضافه یا حذف کن.\n• روی هر تراکنش بزنی می‌تونی مبلغ، دسته و تاریخش رو اصلاح کنی. با آیکون سطل یا کشیدن حذف می‌شه.\n• بالای صفحه جمع امروز، دیروز، این هفته، هفته‌ی قبل، این ماه و ماه قبل (با نام ماه شمسی) هست. با «تاریخچه» روزها، هفته‌ها و ماه‌های گذشته رو می‌بینی.\n• بودجه‌ی ماه جاری با میزان مصرف و باقی‌مانده هر دسته توی همین صفحه نشون داده می‌شه.'),
   _GP(Icons.timer, 'تمرکز و قهرمان',
-      '• در بخش تمرکز، مدت رو انتخاب کن و تایمر رو شروع کن؛ بعد از تموم شدنش سکه می‌گیری.\n• با انجام کارها، عادت‌ها و رسیدن به هدف هم سکه و تجربه می‌گیری.\n• در بخش قهرمان یه حیوون بساز و اسمش رو بذار. با سکه براش غذا و آیتم بخر. غذا تجربه می‌ده و سطحش رو بالا می‌بره.\n• پت از تخم شروع می‌شه: سه بار روش بزن تا باز بشه. با بالا رفتن سطح بزرگ‌تر می‌شه و غذا و آیتم‌ها رو توی صحنه می‌بینی.\n• وقتی تمرکز روشنه نمی‌تونی از برنامه بیرون بری؛ اگه بری جلسه متوقف می‌شه.\n• پت سیری داره و کم‌کم گرسنه می‌شه؛ گرسنه که باشه تجربه‌ها نصف حساب می‌شن. پت سیر هنگام تمرکز ۲۵٪ سکه‌ی اضافه می‌ده.\n• تخم‌ها گاهی نادر 💎 یا افسانه‌ای 👑 درمیان؛ «تخم ویژه» حتماً یکی از این دوتاست. در سطح ۳۰ پت به شکل افسانه‌ای تکامل پیدا می‌کنه.\n• از فروشگاه می‌تونی پس‌زمینه‌ی غار، ساحل، قلعه یا فضا بخری. دشت پیش‌فرض با فصل‌ها عوض می‌شه.\n• مینی‌بازی «گرفتن غذا» روزی ۳ بار جایزه‌ی سکه داره.\n• زنجیره‌ی عادت‌ها و رسیدن به اهداف جایزه‌ی ویژه داره.\n• با آیکون 🙂 بالای صفحه، حال و خلاصه‌ی امروزت رو ثبت می‌کنی.'),
+      '• در بخش تمرکز، مدت رو انتخاب کن و تایمر رو شروع کن؛ بعد از تموم شدنش سکه می‌گیری.\n• با انجام کارها، عادت‌ها و رسیدن به هدف هم سکه و تجربه می‌گیری.\n• در بخش قهرمان یه حیوون بساز و اسمش رو بذار. با سکه براش غذا و آیتم بخر. غذا تجربه می‌ده و سطحش رو بالا می‌بره.\n• پت از تخم شروع می‌شه: سه بار روش بزن تا باز بشه. با بالا رفتن سطح بزرگ‌تر می‌شه و غذا و آیتم‌ها رو توی صحنه می‌بینی.\n• وقتی تمرکز روشنه نمی‌تونی از برنامه بیرون بری؛ اگه بری جلسه متوقف می‌شه.\n• پت سیری داره و کم‌کم گرسنه می‌شه؛ گرسنه که باشه تجربه‌ها نصف حساب می‌شن. پت سیر هنگام تمرکز ۲۵٪ سکه‌ی اضافه می‌ده.\n• تخم‌ها گاهی نادر 💎 یا افسانه‌ای 👑 درمیان؛ «تخم ویژه» حتماً یکی از این دوتاست. در سطح ۳۰ پت به شکل افسانه‌ای تکامل پیدا می‌کنه.\n• از فروشگاه می‌تونی پس‌زمینه‌ی غار، ساحل، قلعه یا فضا بخری. دشت پیش‌فرض با فصل‌ها عوض می‌شه.\n• مینی‌بازی «گرفتن غذا» روزی حداکثر ۲ بار قابل بازیه و جایزه‌ی سکه داره.\n• زنجیره‌ی عادت‌ها و رسیدن به اهداف جایزه‌ی ویژه داره.\n• با آیکون 🙂 بالای صفحه، حال و خلاصه‌ی امروزت رو ثبت می‌کنی.'),
   _GP(Icons.settings, 'تنظیمات',
       'با آیکون چرخ‌دنده:\n• رنگ برنامه و حالت روشن/تیره (نارنجی با پس‌زمینه‌ی خاکستری تیره هم داریم)\n• نمایش تاریخ شمسی\n• روشن/خاموش کردن صدای محیط برنامه\n• پیام امیدبخش روزانه: ساعتش رو انتخاب کن. دکمه‌ی «ارسال آزمایشی» هم برای تست هست.\n• پشتیبان‌گیری: از اطلاعاتت کپی نگه دار و هر وقت خواستی بازیابی کن.'),
   _GP(Icons.notifications_active, 'اجازه‌ها',
@@ -4585,6 +4634,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
       toast('اول تخم رو باز کن 🥚');
       return;
     }
+    if ((prefs.getInt('mg:${ds(DateTime.now())}') ?? 0) >= 2) {
+      toast('امروز دو بار بازی کردی؛ فردا دوباره بیا 🌙');
+      return;
+    }
     await Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => CatchGame(hero: h)));
     if (mounted) setState(() {});
   }
@@ -4697,7 +4750,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
         final plays = prefs.getInt('mg:${ds(DateTime.now())}') ?? 0;
         kids.add(Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: OutlinedButton.icon(icon: const Icon(Icons.sports_esports), label: Text('مینی‌بازی گرفتن غذا (${math.max(0, 3 - plays)} بار جایزه‌دار امروز)'), onPressed: playGame)));
+            child: OutlinedButton.icon(icon: const Icon(Icons.sports_esports), label: Text(plays >= 2 ? 'مینی‌بازی: سهم امروز تموم شد 🌙' : 'مینی‌بازی گرفتن غذا (${2 - plays} بار مونده امروز)'), onPressed: plays >= 2 ? null : playGame)));
       }
       kids.add(Card(
           child: Padding(
