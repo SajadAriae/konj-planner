@@ -1,5 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -25,6 +29,7 @@ Future<void> sfx(String name) async {
     await _sfxPlayer.play(AssetSource('sounds/$name.wav'));
   } catch (_) {}
 }
+
 const gmn = ['ژانویه', 'فوریه', 'مارس', 'آوریل', 'مه', 'ژوئن', 'ژوئیه', 'اوت', 'سپتامبر', 'اکتبر', 'نوامبر', 'دسامبر'];
 
 class Pal {
@@ -43,6 +48,7 @@ const pals = [
   Pal('خاکستری آبی', Colors.blueGrey),
   Pal('خاکستری تیره', Colors.grey, Color(0xFF161616)),
 ];
+
 ThemeData mk(Pal p, Brightness b) {
   var s = ColorScheme.fromSeed(seedColor: p.c, brightness: b);
   final bg = b == Brightness.dark ? p.darkBg : null;
@@ -60,6 +66,7 @@ ThemeData mk(Pal p, Brightness b) {
   }
   return ThemeData(useMaterial3: true, colorScheme: s, scaffoldBackgroundColor: bg);
 }
+
 const wdn = {6: 'شنبه', 7: 'یکشنبه', 1: 'دوشنبه', 2: 'سه‌شنبه', 3: 'چهارشنبه', 4: 'پنجشنبه', 5: 'جمعه'};
 const wdo = [6, 7, 1, 2, 3, 4, 5];
 const jmn = ['فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور', 'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'];
@@ -115,6 +122,7 @@ const gAnimals = [
   GAnimal('dragon', 'اژدها', '🐲', 'spicy'),
   GAnimal('crow', 'کلاغ', '🐦', 'cookie'),
   GAnimal('snake', 'مار', '🐍', 'egg'),
+  GAnimal('wolf', 'گرگ', '🐺', 'steak'),
 ];
 
 class GItem {
@@ -123,7 +131,7 @@ class GItem {
   const GItem(this.id, this.name, this.emoji, this.slot, {this.price = 0, this.xp = 0, this.love = '', this.how = ''});
 }
 
-const slotNames = {'food': 'غذا', 'hat': 'کلاه', 'face': 'عینک و صورت', 'neck': 'گردن', 'back': 'پشت', 'hand': 'دست'};
+const slotNames = {'food': 'غذا', 'hat': 'کلاه', 'face': 'عینک و صورت', 'neck': 'گردن', 'back': 'پشت', 'hand': 'دست', 'bg': 'پس‌زمینه'};
 
 const gItems = [
   GItem('fd_apple', 'سیب', '🍎', 'food', price: 8, xp: 15),
@@ -132,6 +140,7 @@ const gItems = [
   GItem('fd_pepper', 'فلفل آتشین', '🌶️', 'food', price: 18, xp: 30, love: 'spicy'),
   GItem('fd_cookie', 'کلوچه', '🍪', 'food', price: 18, xp: 30, love: 'cookie'),
   GItem('fd_egg', 'تخم‌مرغ', '🥚', 'food', price: 18, xp: 30, love: 'egg'),
+  GItem('fd_steak', 'استیک', '🥩', 'food', price: 22, xp: 38, love: 'steak'),
   GItem('fd_cake', 'کیک', '🍰', 'food', price: 45, xp: 70),
   GItem('fd_feast', 'سفره‌ی ویژه', '🍲', 'food', price: 90, xp: 150),
   GItem('h_cap', 'کپ', '🧢', 'hat', price: 30),
@@ -157,6 +166,10 @@ const gItems = [
   GItem('a_sword', 'شمشیر', '⚔️', 'hand', price: 100),
   GItem('a_wand', 'عصای جادویی', '🪄', 'hand', price: 130),
   GItem('a_orb', 'گوی جادویی', '🔮', 'hand', price: 160),
+  GItem('bg_cave', 'غار کریستالی', '🕳️', 'bg', price: 120),
+  GItem('bg_beach', 'ساحل', '🏖️', 'bg', price: 150),
+  GItem('bg_castle', 'قلعه', '🏰', 'bg', price: 220),
+  GItem('bg_space', 'فضا', '🪐', 'bg', price: 300),
   // جایزه‌های ویژه (فقط با دستاورد باز می‌شن)
   GItem('sp_streak7', 'شعله‌ی ثبات', '🔥', 'neck', how: 'نگه‌داشتن زنجیره‌ی یک عادت به مدت ۷ روز'),
   GItem('sp_streak30', 'جام ثابت‌قدم', '🏆', 'hand', how: 'نگه‌داشتن زنجیره‌ی یک عادت به مدت ۳۰ روز'),
@@ -194,12 +207,26 @@ int focusCoins(int min) => (min * 0.4).round();
 
 class Gm {
   static int coins = 0, active = 0, focusTotal = 0, pool = 0;
+  static String bg = 'meadow';
   static List<Map> heroes = [];
   static Map<String, int> inv = {};
   static Set<String> rw = {};
   static void Function(String msg, bool big)? onEvent;
 
   static int need(int lv) => 100 + 60 * (lv - 1);
+
+  // سیری: ۰ تا ۱۰۰ و کم‌شدن حدود ۲٫۵ واحد در ساعت
+  static double sat(Map h) {
+    final s = (h['sat'] as num?)?.toDouble() ?? 80;
+    final t = (h['satT'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
+    final v = s - (DateTime.now().millisecondsSinceEpoch - t) / 3600000 * 2.5;
+    return v < 0 ? 0 : v;
+  }
+
+  static void setSat(Map h, double v) {
+    h['sat'] = v < 0 ? 0 : (v > 100 ? 100 : v);
+    h['satT'] = DateTime.now().millisecondsSinceEpoch;
+  }
   static void say(String m, [bool big = false]) => onEvent?.call(m, big);
 
   static void load() {
@@ -210,6 +237,7 @@ class Gm {
     active = 0;
     focusTotal = 0;
     pool = 0;
+    bg = 'meadow';
     try {
       final raw = prefs.getString('hero');
       if (raw != null && raw.isNotEmpty) {
@@ -218,6 +246,7 @@ class Gm {
         active = (m['active'] as num?)?.toInt() ?? 0;
         focusTotal = (m['focus'] as num?)?.toInt() ?? 0;
         pool = (m['pool'] as num?)?.toInt() ?? 0;
+        bg = '${m['bg'] ?? 'meadow'}';
         heroes = (m['heroes'] as List? ?? []).map<Map>((e) => Map<String, dynamic>.from(e as Map)).toList();
         inv = {for (final e in (m['inv'] as Map? ?? {}).entries) '${e.key}': (e.value as num).toInt()};
         rw = {for (final e in (m['rw'] as List? ?? [])) '$e'};
@@ -227,6 +256,7 @@ class Gm {
       h['eq'] = Map<String, dynamic>.from((h['eq'] as Map?) ?? {});
       h['lv'] ??= 1;
       h['xp'] ??= 0;
+      if (h['satT'] == null) setSat(h, 80);
     }
     active = heroes.isEmpty ? 0 : active.clamp(0, heroes.length - 1).toInt();
   }
@@ -234,15 +264,17 @@ class Gm {
   static Future<void> save() async {
     final cut = ds(DateTime.now().subtract(const Duration(days: 45)));
     rw.removeWhere((k) => k.startsWith('h:') && k.split(':').last.compareTo(cut) < 0);
-    await prefs.setString('hero', jsonEncode({'coins': coins, 'active': active, 'focus': focusTotal, 'pool': pool, 'heroes': heroes, 'inv': inv, 'rw': rw.toList()}));
+    await prefs.setString('hero', jsonEncode({'coins': coins, 'active': active, 'focus': focusTotal, 'pool': pool, 'heroes': heroes, 'inv': inv, 'rw': rw.toList(), 'bg': bg}));
   }
 
-  static void addXp(int x) {
-    if (heroes.isEmpty) {
+  static void addXp(int x, {bool raw = false}) {
+    if (heroes.isEmpty || heroes[active]['hatched'] == false) {
       pool += x;
       return;
     }
     final h = heroes[active];
+    final stBefore = stageOf((h['lv'] as int?) ?? 1);
+    if (!raw && sat(h) < 25) x = (x * .5).round();
     h['xp'] = (h['xp'] as int) + x;
     while ((h['xp'] as int) >= need(h['lv'] as int)) {
       h['xp'] = (h['xp'] as int) - need(h['lv'] as int);
@@ -251,6 +283,8 @@ class Gm {
       coins += bonus;
       say('🎉 ${h['n']} به سطح ${h['lv']} رسید!\nجایزه‌ی ارتقا: $bonus سکه', true);
     }
+    final stAfter = stageOf(h['lv'] as int);
+    if (stAfter > stBefore) say('🌱 ${h['n']} بزرگ‌تر شد!\nحالا «${stageNames[stAfter]}» است.', true);
     checkSpecials();
   }
 
@@ -267,7 +301,7 @@ class Gm {
     final it = itemById(id);
     say('🎁 جایزه‌ی ویژه!\n${it?.emoji ?? ''} ${it?.name ?? id}\nاز بخش «قهرمان ← جوایز» بپوشونش.', true);
   }
-  
+
   static void checkSpecials() {
     if (rw.where((k) => k.startsWith('g:')).isNotEmpty) grant('sp_goal1');
     if (rw.where((k) => k.startsWith('g:')).length >= 5) grant('sp_goal5');
@@ -311,10 +345,13 @@ class Gm {
 
   static void focusDone(int min) {
     focusTotal += min;
-    final c = focusCoins(min);
+    final dk = 'fd:${ds(DateTime.now())}';
+    prefs.setInt(dk, (prefs.getInt(dk) ?? 0) + min);
+    final comp = heroes.isNotEmpty && heroes[active]['hatched'] != false && sat(heroes[active]) >= 25;
+    final c = focusCoins(min) + (comp ? (focusCoins(min) * .25).round() : 0);
     coins += c;
     addXp(min);
-    say('🧠 $min دقیقه تمرکز کامل شد!\n+$c سکه و +$min تجربه', true);
+    say('🧠 $min دقیقه تمرکز کامل شد!\n+$c سکه${comp ? ' (با پاداش پت همراه)' : ''} و +$min تجربه', true);
     checkSpecials();
     save();
   }
@@ -334,6 +371,11 @@ class Gm {
   }
 
   static void equip(Map h, GItem it) {
+    if (it.slot == 'bg') {
+      bg = bg == it.id ? 'meadow' : it.id;
+      save();
+      return;
+    }
     final eq = h['eq'] as Map;
     if (eq[it.slot] == it.id) {
       eq.remove(it.slot);
@@ -352,41 +394,1141 @@ class Gm {
     if (!wasActive) {
       // غذا همیشه به قهرمان فعال می‌رسد
     }
-    addXp(x);
+    addXp(x, raw: true);
+    setSat(h, math.min(100.0, sat(h) + it.xp * .8));
     save();
     return loved ? '${h['n']} عاشق ${it.name} بود! +$x تجربه 😍' : '+$x تجربه برای ${h['n']}';
   }
 
-  static Map create(String animal, String name) {
-    final h = <String, dynamic>{'id': DateTime.now().microsecondsSinceEpoch, 'a': animal, 'n': name, 'lv': 1, 'xp': 0, 'eq': <String, dynamic>{}};
+  static Map create(String animal, String name, [int rar = 0]) {
+    final h = <String, dynamic>{'id': DateTime.now().microsecondsSinceEpoch, 'a': animal, 'n': name, 'lv': 1, 'xp': 0, 'eq': <String, dynamic>{}, 'hatched': false, 'rar': rar};
     heroes.add(h);
     active = heroes.length - 1;
+    save();
+    return h;
+  }
+
+  // بعد از باز شدن تخم: تجربه‌ی جمع‌شده به پت می‌رسد
+  static void hatched(Map h) {
+    h['hatched'] = true;
+    setSat(h, 70);
     if (pool > 0) {
       final p = pool;
       pool = 0;
       addXp(p);
     }
     save();
-    return h;
   }
 }
 
-Widget heroView(Map h, {double size = 110}) {
-  final a = animalById('${h['a']}');
+// ───────────────────────── پیکسل‌آرت: پت و آیتم‌ها ─────────────────────────
+int stageOf(int lv) => lv < 5 ? 0 : (lv < 10 ? 1 : (lv < 18 ? 2 : (lv < 30 ? 3 : 4)));
+const stageNames = ['نوزاد', 'کودک', 'نوجوان', 'بالغ', 'افسانه‌ای'];
+
+int seasonNow() {
+  final n = DateTime.now();
+  final j = g2j(n.year, n.month, n.day)[1];
+  return j <= 3 ? 0 : (j <= 6 ? 1 : (j <= 9 ? 2 : 3)); // بهار، تابستان، پاییز، زمستان
+}
+
+int rollRarity(bool premium) {
+  final r = math.Random().nextDouble();
+  if (premium) return r < .3 ? 2 : 1;
+  return r < .08 ? 2 : (r < .3 ? 1 : 0);
+}
+
+int _cl(num v) => v < 0 ? 0 : (v > 255 ? 255 : v.round());
+int _rgb2(int r, int g, int b) => 0xFF000000 | (r << 16) | (g << 8) | b;
+int _shade(int c, double f) {
+  final r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+  if (f >= 1) {
+    final t = f - 1;
+    return _rgb2(_cl(r + (255 - r) * t), _cl(g + (255 - g) * t), _cl(b + (255 - b) * t));
+  }
+  return _rgb2(_cl(r * f), _cl(g * f), _cl(b * f));
+}
+
+List<int> _tones(int c) => [_shade(c, 1.3), c, _shade(c, .68)];
+
+class Px {
+  final int w, h;
+  final List<int> p;
+  Px(this.w, this.h) : p = List<int>.filled(w * h, 0);
+  void set(int x, int y, int c) {
+    if (x >= 0 && y >= 0 && x < w && y < h) p[y * w + x] = c;
+  }
+
+  int get(int x, int y) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : p[y * w + x];
+
+  void ell(double cx, double cy, double rx, double ry, List<int> t, {bool onlyOn = false}) {
+    if (rx < .5 || ry < .5) return;
+    for (var y = (cy - ry).floor(); y <= (cy + ry).ceil(); y++) {
+      for (var x = (cx - rx).floor(); x <= (cx + rx).ceil(); x++) {
+        final dx = (x + .5 - cx) / rx, dy = (y + .5 - cy) / ry;
+        if (dx * dx + dy * dy > 1) continue;
+        if (onlyOn && get(x, y) == 0) continue;
+        final l = -dx * .55 - dy * .8;
+        set(x, y, l > .38 ? t[0] : (l > -.3 ? t[1] : t[2]));
+      }
+    }
+  }
+
+  void rect(int x0, int y0, int x1, int y1, int c) {
+    for (var y = y0; y <= y1; y++) {
+      for (var x = x0; x <= x1; x++) {
+        set(x, y, c);
+      }
+    }
+  }
+
+  void tri(double x0, double y0, double x1, double y1, double x2, double y2, List<int> t) {
+    final minX = math.min(x0, math.min(x1, x2)).floor(), maxX = math.max(x0, math.max(x1, x2)).ceil();
+    final minY = math.min(y0, math.min(y1, y2)).floor(), maxY = math.max(y0, math.max(y1, y2)).ceil();
+    double sg(double ax, double ay, double bx, double by, double cx, double cy) => (ax - cx) * (by - cy) - (bx - cx) * (ay - cy);
+    final cyc = (y0 + y1 + y2) / 3;
+    for (var y = minY; y <= maxY; y++) {
+      for (var x = minX; x <= maxX; x++) {
+        final px = x + .5, py = y + .5;
+        final d1 = sg(px, py, x0, y0, x1, y1), d2 = sg(px, py, x1, y1, x2, y2), d3 = sg(px, py, x2, y2, x0, y0);
+        final neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
+        if (neg && pos) continue;
+        set(x, y, py < cyc - .6 ? t[0] : (py > cyc + 1.6 ? t[2] : t[1]));
+      }
+    }
+  }
+
+  void line(double x0, double y0, double x1, double y1, int c) {
+    final n = math.max((x1 - x0).abs(), (y1 - y0).abs()).ceil();
+    for (var i = 0; i <= n; i++) {
+      final t = n == 0 ? 0.0 : i / n;
+      set((x0 + (x1 - x0) * t).floor(), (y0 + (y1 - y0) * t).floor(), c);
+    }
+  }
+
+  void outline(int c) {
+    final src = List<int>.from(p);
+    int g(int x, int y) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : src[y * w + x];
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        if (src[y * w + x] != 0) continue;
+        if (g(x - 1, y) != 0 || g(x + 1, y) != 0 || g(x, y - 1) != 0 || g(x, y + 1) != 0) p[y * w + x] = c;
+      }
+    }
+  }
+}
+
+class PxPainter extends CustomPainter {
+  final Px px;
+  PxPainter(this.px);
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cell = size.width / px.w;
+    final paint = Paint()..isAntiAlias = false;
+    for (var y = 0; y < px.h; y++) {
+      for (var x = 0; x < px.w; x++) {
+        final c = px.p[y * px.w + x];
+        if (c == 0) continue;
+        paint.color = Color(c);
+        canvas.drawRect(Rect.fromLTWH(x * cell, y * cell, cell + .6, cell + .6), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(PxPainter old) => old.px != px;
+}
+
+// ایموجی → پیکسل‌آرت سه‌بعدی (ضخامت + سایه + خط دور)
+final _pxFut = <String, Future<ui.Image>>{};
+Future<ui.Image> pixelEmoji(String e, [int g = 18]) => _pxFut.putIfAbsent('$e|$g', () => _mkPixelEmoji(e, g));
+
+Future<ui.Image> _pxToImage(Px px) {
+  final bytes = Uint8List(px.w * px.h * 4);
+  for (var i = 0; i < px.p.length; i++) {
+    final c = px.p[i];
+    if (c == 0) continue;
+    bytes[i * 4] = (c >> 16) & 255;
+    bytes[i * 4 + 1] = (c >> 8) & 255;
+    bytes[i * 4 + 2] = c & 255;
+    bytes[i * 4 + 3] = 255;
+  }
+  final comp = Completer<ui.Image>();
+  ui.decodeImageFromPixels(bytes, px.w, px.h, ui.PixelFormat.rgba8888, comp.complete);
+  return comp.future;
+}
+
+Future<ui.Image> _mkPixelEmoji(String e, int g) async {
+  final rec = ui.PictureRecorder();
+  final cv = Canvas(rec);
+  final tp = TextPainter(text: TextSpan(text: e, style: TextStyle(fontSize: g * .78)), textDirection: TextDirection.ltr)..layout();
+  tp.paint(cv, Offset((g - tp.width) / 2, (g - tp.height) / 2));
+  final img = await rec.endRecording().toImage(g, g);
+  final bd = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+  final o = g + 5;
+  final out = Px(o, o);
+  if (bd != null) {
+    final src = bd.buffer.asUint8List();
+    final mask = List<bool>.filled(g * g, false);
+    final col = List<int>.filled(g * g, 0);
+    int q(int v) => _cl(((v / 64).round() * 64));
+    for (var i = 0; i < g * g; i++) {
+      if (src[i * 4 + 3] > 140) {
+        mask[i] = true;
+        col[i] = _rgb2(q(src[i * 4]), q(src[i * 4 + 1]), q(src[i * 4 + 2]));
+      }
+    }
+    for (var d = 3; d >= 1; d--) {
+      for (var y = 0; y < g; y++) {
+        for (var x = 0; x < g; x++) {
+          if (mask[y * g + x]) out.set(x + 1 + d, y + 1 + d, _shade(col[y * g + x], d == 3 ? .42 : (d == 2 ? .5 : .58)));
+        }
+      }
+    }
+    for (var y = 0; y < g; y++) {
+      for (var x = 0; x < g; x++) {
+        if (!mask[y * g + x]) continue;
+        var c = col[y * g + x];
+        final up = y > 0 && mask[(y - 1) * g + x], left = x > 0 && mask[y * g + x - 1];
+        if (!up || !left) c = _shade(c, 1.22);
+        out.set(x + 1, y + 1, c);
+      }
+    }
+  }
+  out.outline(0xFF1D1D29);
+  return _pxToImage(out);
+}
+
+class PxEmoji extends StatelessWidget {
+  final String e;
+  final double size;
+  const PxEmoji(this.e, this.size, {super.key});
+  @override
+  Widget build(BuildContext context) => FutureBuilder<ui.Image>(
+      future: pixelEmoji(e),
+      builder: (c, snap) => snap.hasData
+          ? RawImage(image: snap.data, width: size, height: size, fit: BoxFit.contain, filterQuality: FilterQuality.none)
+          : SizedBox(width: size, height: size));
+}
+
+// ── پت‌های پیکسلی ──
+const _pal = {
+  'cat': [0xFFF0A24A, 0xFFFFE6C0, 0xFFB5651D],
+  'dog': [0xFFC9904E, 0xFFF3DDB5, 0xFF7A4A21],
+  'dragon': [0xFF4FBF6B, 0xFFF4DC8A, 0xFF2C7A47],
+  'crow': [0xFF3B3B52, 0xFF5E5E7C, 0xFF1B1B26],
+  'snake': [0xFF7FCB5E, 0xFFEFF2B0, 0xFF3F8F3A],
+  'wolf': [0xFF8A97AB, 0xFFEFF3F8, 0xFF4F5A6C],
+};
+
+int _hueRot(int c, double deg) {
+  final hsv = HSVColor.fromColor(Color(c));
+  return hsv.withHue((hsv.hue + deg) % 360).withSaturation(math.max(hsv.saturation, .38)).toColor().toARGB32();
+}
+
+List<int> _palFor(String sp, int rar) {
+  final b = _pal[sp] ?? _pal['cat']!;
+  if (rar == 2) return const [0xFFF6C945, 0xFFFFF3C4, 0xFFC98B1F];
+  if (rar == 1) return [for (final c in b) _hueRot(c, 150)];
+  return b;
+}
+
+class PetSprite {
+  final Px px;
+  final double hx, hy, hrx, hry, bx, by, brx, bry, mx, my, ey;
+  PetSprite(this.px, this.hx, this.hy, this.hrx, this.hry, this.bx, this.by, this.brx, this.bry, this.mx, this.my, this.ey);
+}
+
+final _spriteCache = <String, PetSprite>{};
+PetSprite petSprite(String sp, int stage, String face, [int rar = 0]) => _spriteCache.putIfAbsent('$sp|$stage|$face|$rar', () => _buildPet(sp, stage, face, rar));
+
+PetSprite _buildPet(String sp, int stage, String face, int rar) {
+  final px = Px(48, 48);
+  final pc = _palFor(sp, rar);
+  final base = _tones(pc[0]), belly = _tones(pc[1]), acc = _tones(pc[2]);
+  final sc = const [.58, .74, .9, 1.0, 1.06][stage];
+  final hk = const [1.5, 1.3, 1.12, 1.0, 1.0][stage];
+  var brx = 11.0 * sc, bry = 8.5 * sc;
+  if (sp == 'snake') {
+    brx = 9.5 * sc;
+    bry = 3.4 * sc + .8;
+  }
+  final bcx = 24.0;
+  var bcy = 43.0 - bry;
+  final hrx = 8.8 * sc * hk, hry = 8.0 * sc * hk;
+  var hcy = bcy - bry * .55 - hry * .55;
+  final hcx = 24.0;
+  if (sp == 'snake') {
+    bcy = 41.0;
+    hcy = 41.0 - 10 * sc - 3 * sc - hry * .7;
+  }
+  final k = sc;
+
+  // ───── بدن و اندام‌ها (پشت سر) ─────
+  if (sp == 'cat' || sp == 'dog' || sp == 'wolf' || sp == 'dragon') {
+    final tl = sp == 'dragon' ? 15.0 : (sp == 'wolf' ? 11.0 : (sp == 'dog' ? 7.0 : 12.0));
+    final tr = sp == 'wolf' ? 2.4 : (sp == 'dragon' ? 2.0 : 1.7);
+    for (var i = 0; i < 9; i++) {
+      final t = i / 8;
+      final tx = bcx + brx * .75 + math.sin(t * 2.2) * 4.5 * k + t * 3 * k;
+      final ty = bcy + bry * .25 - t * tl * k * (sp == 'dog' ? 1.0 : .9);
+      px.ell(tx, ty, tr * k + .6 - (sp == 'dragon' ? t * 1.2 * k : 0), tr * k + .6 - (sp == 'dragon' ? t * 1.2 * k : 0), sp == 'wolf' && i > 6 ? belly : base);
+    }
+    if (sp == 'dragon') {
+      px.tri(bcx + brx * .75 + 6 * k + 2.8 * k, bcy - tl * k * .9 + bry * .25 - 2.4 * k, bcx + brx * .75 + 6 * k + 2.8 * k, bcy - tl * k * .9 + bry * .25 + 2.4 * k, bcx + brx * .75 + 6 * k + 6.5 * k, bcy - tl * k * .9 + bry * .25, _tones(0xFFF4DC8A));
+    }
+  }
+  if (sp == 'dragon') {
+    final wk = const [.38, .58, .82, 1.05, 1.3][stage];
+    for (final sd in [-1, 1]) {
+      final x0 = bcx + sd * brx * .55;
+      px.tri(x0, bcy - bry * .1, x0 + sd * 12 * wk, bcy - bry - 11 * wk, x0 + sd * 13 * wk, bcy + 1 * wk, acc);
+      px.tri(x0 + sd * 1.5 * wk, bcy - bry * .1, x0 + sd * 9.5 * wk, bcy - bry - 7 * wk, x0 + sd * 10 * wk, bcy - 1 * wk, _tones(0xFF7BD88F));
+    }
+  }
+  if (stage == 4 && sp != 'dragon') {
+    for (final sd in [-1, 1]) {
+      final x0 = bcx + sd * brx * .55;
+      px.tri(x0, bcy - bry * .1, x0 + sd * 11, bcy - bry - 9, x0 + sd * 12, bcy + 1, _tones(0xFFEAF2FF));
+      px.tri(x0 + sd * 1.5, bcy - bry * .1, x0 + sd * 8.5, bcy - bry - 5.5, x0 + sd * 9.5, bcy - 1, _tones(0xFFFFFFFF));
+    }
+  }
+  if (sp == 'crow') {
+    for (var i = 0; i < 3; i++) {
+      px.tri(bcx + brx * .5 + i * 1.2 * k, bcy + bry * .1, bcx + brx * 1.5 + i * 1.4 * k, bcy + bry * (.5 + i * .25), bcx + brx * .75 + i * 1.2 * k, bcy + bry * 1.05, acc);
+    }
+    px.line(bcx - brx * .35, 43, bcx - brx * .35, 46, 0xFFF2A53A);
+    px.line(bcx + brx * .35, 43, bcx + brx * .35, 46, 0xFFF2A53A);
+  }
+
+  if (sp == 'snake') {
+    // دم
+    px.ell(bcx + brx * 1.15, 42.2, 3.2 * k + .6, 1.4 * k + .5, base);
+    px.ell(bcx + brx * 1.15 + 3.4 * k, 42.2, 1.8 * k + .5, 1.0 * k + .4, base);
+    final coils = [
+      [41.0, brx, 3.4 * k + .8],
+      [41.0 - 5 * k, brx * .85, 3.0 * k + .7],
+      [41.0 - 10 * k, brx * .66, 2.8 * k + .6],
+    ];
+    for (final c in coils) {
+      px.ell(bcx, c[0], c[1], c[2], base);
+      px.ell(bcx, c[0] + c[2] * .35, c[1] * .62, c[2] * .55, belly, onlyOn: true);
+      for (var i = -2; i <= 2; i++) {
+        final dx = (bcx + i * c[1] * .36).round();
+        px.set(dx, (c[0] - c[2] * .45).round(), acc[1]);
+        px.set(dx + 1, (c[0] - c[2] * .45).round(), acc[1]);
+      }
+    }
+  } else {
+    // بدن
+    px.ell(bcx, bcy, brx, bry, base);
+    px.ell(bcx, bcy + bry * .28, brx * .6, bry * .62, belly, onlyOn: true);
+    for (final sd in [-1, 1]) {
+      px.ell(bcx + sd * brx * .55, 43.2, 3.0 * k + .6, 1.9 * k + .5, sp == 'wolf' || sp == 'cat' ? base : base);
+    }
+    if (sp == 'dragon') {
+      for (var i = -1; i <= 1; i++) {
+        px.tri(bcx + i * brx * .35 - 1.4 * k, bcy - bry + .5, bcx + i * brx * .35 + 1.4 * k, bcy - bry + .5, bcx + i * brx * .35, bcy - bry - 2.4 * k - .5, _tones(0xFFF4DC8A));
+      }
+    }
+    if (sp == 'crow') {
+      for (final sd in [-1, 1]) {
+        px.ell(bcx + sd * brx * .72, bcy, brx * .42, bry * .8, _tones(0xFF4A4A68));
+      }
+    }
+    if (sp == 'wolf') {
+      px.ell(bcx, bcy - bry * .1, brx * .5, bry * .85, belly, onlyOn: true);
+    }
+  }
+
+  // ───── گوش و شاخ (پشت سر، قبل از کله) ─────
+  if (sp == 'cat' || sp == 'wolf') {
+    final eh = sp == 'wolf' ? 1.7 : 1.5;
+    for (final sd in [-1, 1]) {
+      px.tri(hcx + sd * hrx * .92, hcy - hry * .15, hcx + sd * hrx * .2, hcy - hry * .85, hcx + sd * hrx * (sp == 'wolf' ? .8 : .85), hcy - hry * eh, base);
+      px.tri(hcx + sd * hrx * .75, hcy - hry * .35, hcx + sd * hrx * .38, hcy - hry * .8, hcx + sd * hrx * .72, hcy - hry * (eh - .3), sp == 'wolf' ? acc : _tones(0xFFFF9BB0));
+    }
+  }
+  if (sp == 'dragon') {
+    final hl = const [.6, .9, 1.2, 1.5, 1.8][stage];
+    for (final sd in [-1, 1]) {
+      px.tri(hcx + sd * hrx * .62, hcy - hry * .6, hcx + sd * hrx * .2, hcy - hry * .85, hcx + sd * hrx * .75, hcy - hry * .85 - 4.2 * hl, _tones(0xFFF4DC8A));
+    }
+  }
+
+  // ───── کله ─────
+  px.ell(hcx, hcy, hrx, hry, base);
+  if (sp == 'snake') {
+    px.ell(hcx, hcy + hry * .35, hrx * .7, hry * .5, belly, onlyOn: true);
+  }
+  if (sp == 'cat') {
+    px.ell(hcx, hcy + hry * .42, hrx * .45, hry * .36, belly, onlyOn: true);
+    for (final i in [-1, 0, 1]) {
+      px.rect((hcx + i * hrx * .22).round(), (hcy - hry * .85).round(), (hcx + i * hrx * .22).round(), (hcy - hry * .5).round(), acc[1]);
+    }
+  }
+  if (sp == 'dog') {
+    px.ell(hcx, hcy + hry * .42, hrx * .52, hry * .42, belly, onlyOn: true);
+    for (final sd in [-1, 1]) {
+      px.ell(hcx + sd * hrx * 1.0, hcy + hry * .15, hrx * .3, hry * .62, acc);
+    }
+  }
+  if (sp == 'wolf') {
+    px.ell(hcx, hcy + hry * .45, hrx * .55, hry * .42, belly, onlyOn: true);
+    for (final sd in [-1, 1]) {
+      px.tri(hcx + sd * hrx * .95, hcy + hry * .1, hcx + sd * hrx * 1.35, hcy + hry * .55, hcx + sd * hrx * .75, hcy + hry * .75, belly);
+    }
+  }
+  if (sp == 'dragon') {
+    px.ell(hcx, hcy + hry * .42, hrx * .52, hry * .38, _tones(0xFF8FE0A0), onlyOn: true);
+    for (final sd in [-1, 1]) {
+      px.set((hcx + sd * hrx * .2).round(), (hcy + hry * .35).round(), acc[2]);
+    }
+  }
+  if (sp == 'crow') {
+    // منقار
+    final open = face == 'eat' || face == 'happy';
+    px.tri(hcx - hrx * .28, hcy + hry * .02, hcx + hrx * .28, hcy + hry * .02, hcx, hcy + hry * .62, _tones(0xFFF2A53A));
+    if (open) px.set(hcx.round(), (hcy + hry * .5).round(), 0xFF7A2A2A);
+  }
+
+  // ───── صورت ─────
+  final ey = hcy - hry * .1;
+  final exo = hrx * .42;
+  final big = stage == 0;
+  final lx = (hcx - exo).round(), rx2 = (hcx + exo).round();
+  const dark = 0xFF1A1A24;
+  void eyeAt(int x) {
+    if (face == 'blink') {
+      px.rect(x - 1, ey.round() + 1, x, ey.round() + 1, dark);
+    } else if (face == 'sleep') {
+      px.set(x - 1, ey.round(), dark);
+      px.set(x, ey.round() + 1, dark);
+      px.set(x + 1, ey.round(), dark);
+    } else if (face == 'happy') {
+      px.set(x - 1, ey.round() + 1, dark);
+      px.set(x, ey.round(), dark);
+      px.set(x + 1, ey.round() + 1, dark);
+    } else {
+      final h = big ? 3 : 2;
+      if (sp == 'crow') px.rect(x - 1, ey.round() - 1, x + 1, ey.round() + h - 1, 0xFFFFFFFF);
+      px.rect(x, ey.round(), x, ey.round() + h - 1, dark);
+      px.rect(x + (sp == 'crow' ? 0 : 1), ey.round(), x + (sp == 'crow' ? 0 : 1), ey.round() + h - 1, dark);
+      if (sp != 'crow') px.set(x, ey.round(), 0xFFFFFFFF);
+    }
+  }
+
+  eyeAt(lx);
+  eyeAt(rx2);
+  if (face == 'sad') px.set(rx2 + 1, ey.round() + 3, 0xFF7CC8FF);
+  final mx = hcx, my = hcy + hry * .68;
+  if (sp != 'crow') {
+    if (sp == 'cat' || sp == 'dog' || sp == 'wolf') {
+      px.set(hcx.round() - 1, (hcy + hry * .28).round(), face == 'sleep' ? dark : 0xFF2A1A1A);
+      px.set(hcx.round(), (hcy + hry * .28).round(), face == 'sleep' ? dark : 0xFF2A1A1A);
+    }
+    final mxi = mx.round(), myi = my.round();
+    if (face == 'eat') {
+      px.ell(mx, my + .4, 2.2, 1.7, const [0xFF8A2D3A, 0xFF8A2D3A, 0xFF5E1D28]);
+    } else if (face == 'happy') {
+      px.rect(mxi - 1, myi, mxi + 1, myi, 0xFF8A2D3A);
+      px.rect(mxi, myi + 1, mxi, myi + 1, 0xFFFF7A8A);
+    } else if (face == 'sad') {
+      px.set(mxi - 1, myi + 1, 0xFF5E2A2A);
+      px.set(mxi, myi, 0xFF5E2A2A);
+      px.set(mxi + 1, myi + 1, 0xFF5E2A2A);
+    } else if (face == 'sleep') {
+      px.set(mxi, myi, dark);
+    } else {
+      px.set(mxi - 1, myi, 0xFF5E2A2A);
+      px.set(mxi, myi + 1, 0xFF5E2A2A);
+      px.set(mxi + 1, myi, 0xFF5E2A2A);
+    }
+    if (sp == 'snake' && face != 'happy') {
+      px.line(mx, my + 2, mx, my + 4, 0xFFE0334A);
+      px.set(mxi - 1, myi + 5, 0xFFE0334A);
+      px.set(mxi + 1, myi + 5, 0xFFE0334A);
+    }
+    if (sp == 'dog' && (face == 'happy' || face == 'eat2')) px.rect(mxi, myi + 1, mxi + 1, myi + 3, 0xFFFF7A9A);
+  }
+  if (face == 'happy' || face == 'eat' || face == 'eat2') {
+    px.rect((hcx - hrx * .72).round(), (hcy + hry * .32).round(), (hcx - hrx * .72).round() + 1, (hcy + hry * .32).round(), 0xFFFF9BB0);
+    px.rect((hcx + hrx * .72).round() - 1, (hcy + hry * .32).round(), (hcx + hrx * .72).round(), (hcy + hry * .32).round(), 0xFFFF9BB0);
+  }
+  if (sp == 'cat') {
+    for (final sd in [-1, 1]) {
+      px.line(hcx + sd * hrx * .55, hcy + hry * .4, hcx + sd * hrx * 1.1, hcy + hry * .3, 0xFFF0F0F0);
+      px.line(hcx + sd * hrx * .55, hcy + hry * .5, hcx + sd * hrx * 1.1, hcy + hry * .58, 0xFFF0F0F0);
+    }
+  }
+
+  if (stage == 4) {
+    px.rect(hcx.round() - 1, (hcy - hry * .62).round(), hcx.round(), (hcy - hry * .62).round() + 1, 0xFF4FE3FF);
+    px.set(hcx.round() - 1, (hcy - hry * .62).round(), 0xFFFFFFFF);
+  }
+  px.outline(0xFF20202C);
+  return PetSprite(px, hcx, hcy, hrx, hry, bcx, bcy, brx, bry, mx, my, ey);
+}
+
+final _eggCache = <String, Px>{};
+Px eggSprite(String sp, int cracks, [int rar = 0]) => _eggCache.putIfAbsent('$sp|$cracks|$rar', () {
+      final px = Px(48, 48);
+      final pc = _palFor(sp, rar);
+      final shell = _tones(0xFFF7F0DE), spot = _tones(pc[0]);
+      const cy = 27.0, ry = 19.0;
+      for (var y = 0; y < 48; y++) {
+        final t = (y + .5 - cy) / ry;
+        if (t.abs() > 1) continue;
+        final rx = 14.0 * math.sqrt(1 - t * t) * (1 + .18 * t);
+        for (var x = (24 - rx).floor(); x <= (24 + rx).ceil(); x++) {
+          final dx = (x + .5 - 24) / (rx < .5 ? .5 : rx);
+          if (dx.abs() > 1) continue;
+          final l = -dx * .55 - t * .8;
+          px.set(x, y, l > .38 ? shell[0] : (l > -.3 ? shell[1] : shell[2]));
+        }
+      }
+      px.ell(18, 31, 4.2, 3.4, spot, onlyOn: true);
+      px.ell(30, 22, 3.6, 3.0, spot, onlyOn: true);
+      px.ell(29, 36, 3.4, 2.4, _tones(pc[2]), onlyOn: true);
+      px.ell(20, 17, 2.2, 1.8, _tones(pc[2]), onlyOn: true);
+      const cr = 0xFF5B4A3A, glow = 0xFFFFE680;
+      void zig(List<List<double>> pts) {
+        for (var i = 0; i < pts.length - 1; i++) {
+          px.line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], cr);
+          px.line(pts[i][0] + 1, pts[i][1], pts[i + 1][0] + 1, pts[i + 1][1], glow);
+        }
+      }
+
+      if (cracks >= 1) zig([[24, 9], [22, 14], [26, 18]]);
+      if (cracks >= 2) zig([[26, 18], [21, 23], [27, 28]]);
+      if (cracks >= 3) {
+        zig([[27, 28], [22, 33], [28, 38]]);
+        zig([[22, 14], [17, 17], [15, 22]]);
+        zig([[27, 28], [33, 26], [36, 30]]);
+      }
+      px.outline(0xFF20202C);
+      return px;
+    });
+
+bool isNight() {
+  final h = DateTime.now().hour;
+  return h >= 23 || h < 6;
+}
+
+Widget petCanvas(Map h, {double size = 200, String face = 'idle', double bob = 0}) {
+  final cell = size / 48;
+  final rar = (h['rar'] as int?) ?? 0;
+  if (h['hatched'] == false) {
+    return SizedBox(width: size, height: size, child: CustomPaint(painter: PxPainter(eggSprite('${h['a']}', 0, rar))));
+  }
+  final sp = '${h['a']}';
+  final stage = stageOf((h['lv'] as int?) ?? 1);
+  final spr = petSprite(sp, stage, face, rar);
   final eq = Map<String, dynamic>.from((h['eq'] as Map?) ?? {});
-  String? e(String slot) => eq[slot] == null ? null : itemById('${eq[slot]}')?.emoji;
-  Widget at(double x, double y, String t, double f) => Align(alignment: Alignment(x, y), child: Text(t, style: TextStyle(fontSize: size * f)));
+  Widget item(String slot, double cx, double cy, double w) {
+    final it = eq[slot] == null ? null : itemById('${eq[slot]}');
+    if (it == null) return const SizedBox.shrink();
+    final sz = w * cell;
+    return Positioned(left: cx * cell - sz / 2, top: cy * cell - sz / 2, width: sz, height: sz, child: PxEmoji(it.emoji, sz));
+  }
+
+  final hatW = spr.hrx * 1.5, faceW = spr.hrx * 1.45;
   return SizedBox(
-      width: size * 1.7,
-      height: size * 1.5,
-      child: Stack(alignment: Alignment.center, children: [
-        if (e('back') != null) at(-.8, -.05, e('back')!, .5),
-        Text(a.emoji, style: TextStyle(fontSize: size)),
-        if (e('face') != null) at(0, -.12, e('face')!, .42),
-        if (e('neck') != null) at(0, .62, e('neck')!, .36),
-        if (e('hat') != null) at(0, -.92, e('hat')!, .46),
-        if (e('hand') != null) at(.85, .4, e('hand')!, .42),
-      ]));
+      width: size,
+      height: size,
+      child: Transform.translate(
+          offset: Offset(0, bob),
+          child: Stack(clipBehavior: Clip.none, children: [
+            item('back', spr.bx - spr.brx * .95, spr.by - spr.bry * .2, spr.brx * 1.7),
+            Positioned.fill(child: CustomPaint(painter: PxPainter(spr.px))),
+            item('neck', spr.hx, spr.hy + spr.hry * .95, spr.brx * 1.05),
+            item('face', spr.hx, spr.ey + .6, faceW),
+            item('hat', spr.hx, spr.hy - spr.hry * .95 - hatW * .12, hatW),
+            item('hand', spr.bx + spr.brx * 1.1, spr.by + spr.bry * .15, spr.brx * 1.3),
+          ])));
+}
+
+Widget heroView(Map h, {double size = 110}) => petCanvas(h, size: size * 1.8);
+
+// ── صحنه‌ی پت: تنفس، پلک، غذا خوردن، خوشحالی، تخم و بیرون آمدن ──
+class ScenePainter extends CustomPainter {
+  final String scene;
+  final bool night;
+  final int season;
+  final Animation<double> anim;
+  ScenePainter(this.scene, this.night, this.season, this.anim) : super(repaint: anim);
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final t = anim.value;
+    final u = s.width / 40;
+    final gy = s.height * .8;
+    final p = Paint()..isAntiAlias = false;
+    void sky(Color a, Color b) => canvas.drawRect(Offset.zero & s, Paint()..shader = ui.Gradient.linear(Offset.zero, Offset(0, s.height), [a, b]));
+    void box(double x, double y, double w, double h, Color c) {
+      p.color = c;
+      canvas.drawRect(Rect.fromLTWH(x, y, w, h), p);
+    }
+
+    void ground(Color a, Color b) {
+      box(0, gy, s.width, s.height - gy, a);
+      box(0, gy, s.width, u * .9, b);
+    }
+
+    switch (scene) {
+      case 'cave':
+        sky(const Color(0xFF1B1626), const Color(0xFF3A2D4A));
+        for (var i = 0; i < 9; i++) {
+          final x = i * 4.6 * u, w = (2.4 + (i % 3)) * u, h = (4 + (i * 7 % 5)) * u;
+          canvas.drawPath(Path()..moveTo(x, 0)..lineTo(x + w, 0)..lineTo(x + w / 2, h)..close(), p..color = const Color(0xFF2A2236));
+        }
+        for (var i = 0; i < 7; i++) {
+          final pulse = .55 + .45 * math.sin(t * math.pi * 2 + i);
+          box((3 + i * 5.3) * u, gy - (2 + (i % 3) * 1.5) * u, u * 1.2, u * (2 + (i % 3) * 1.5), (i.isEven ? const Color(0xFF58E0FF) : const Color(0xFFD27BFF)).withOpacity(pulse));
+        }
+        ground(const Color(0xFF4A4458), const Color(0xFF6A6480));
+        break;
+      case 'beach':
+        sky(night ? const Color(0xFF1A2650) : const Color(0xFF8FD3FF), night ? const Color(0xFF3A4A8A) : const Color(0xFFFFF1D0));
+        box(30 * u, 2.5 * u, 4 * u, 4 * u, night ? const Color(0xFFFFF0B0) : const Color(0xFFFFE066));
+        box(0, s.height * .52, s.width, gy - s.height * .52, const Color(0xFF3FA9E0));
+        for (var i = 0; i < 8; i++) {
+          box(((i * 5.5 + t * 8) % 44 - 2) * u, s.height * .52 + (i % 3) * 2.2 * u, u * 3, u * .7, Colors.white.withOpacity(.8));
+        }
+        ground(const Color(0xFFF0D9A0), const Color(0xFFD9BE80));
+        for (var i = 0; i < 6; i++) {
+          box((3 + i * 6.2) * u, gy + (2 + (i % 2) * 2) * u, u * .9, u * .9, const Color(0xFFFF9BB0));
+        }
+        break;
+      case 'castle':
+        sky(night ? const Color(0xFF14183A) : const Color(0xFF5B6BD6), night ? const Color(0xFF3A2F6B) : const Color(0xFFF6B58A));
+        const wall = Color(0xFF6B6F8F), dk = Color(0xFF4C5070);
+        box(9 * u, gy - 9 * u, 22 * u, 9 * u, wall);
+        for (final tx in [6.0, 30.0]) {
+          box(tx * u, gy - 14 * u, 5 * u, 14 * u, dk);
+          for (var i = 0; i < 3; i++) {
+            box((tx + i * 2) * u, gy - 15.5 * u, u * 1.1, u * 1.5, dk);
+          }
+        }
+        for (var i = 0; i < 8; i++) {
+          box((9.5 + i * 2.8) * u, gy - 10.5 * u, u * 1.4, u * 1.5, wall);
+        }
+        box(18 * u, gy - 5 * u, 4 * u, 5 * u, const Color(0xFF2A2236));
+        for (final wx in [11.5, 26.0]) {
+          box(wx * u, gy - 7 * u, u * 1.4, u * 2, const Color(0xFFFFE066).withOpacity(.6 + .4 * math.sin(t * math.pi * 2 + wx)));
+        }
+        ground(const Color(0xFF8A8DA8), const Color(0xFFA7AAC4));
+        for (var i = 0; i < 10; i++) {
+          box(i * 4.2 * u, gy + 3 * u, u * 2, u * .5, const Color(0xFF70738C));
+        }
+        break;
+      case 'space':
+        sky(const Color(0xFF05061A), const Color(0xFF241B54));
+        for (var i = 0; i < 26; i++) {
+          final tw = .4 + .6 * math.sin(t * math.pi * 2 + i * 1.7).abs();
+          box(((i * 13) % 40) * u, ((i * 7) % 28) * u, u * .6, u * .6, Colors.white.withOpacity(tw));
+        }
+        p.color = const Color(0xFFE59A5B);
+        canvas.drawCircle(Offset(31 * u, 6 * u), 4.2 * u, p);
+        box(25.5 * u, 5.6 * u, 11 * u, u * .8, const Color(0xFFF3D2A8));
+        ground(const Color(0xFF9A9AAE), const Color(0xFFB8B8CC));
+        for (final c in [[6.0, 3.0], [20.0, 5.0], [32.0, 3.5]]) {
+          canvas.drawOval(Rect.fromLTWH(c[0] * u, gy + c[1] * u, u * 4, u * 1.4), p..color = const Color(0xFF7C7C92));
+        }
+        break;
+      default:
+        sky(night ? const Color(0xFF141B3A) : const Color(0xFF8FD3FF), night ? const Color(0xFF3A2F6B) : const Color(0xFFFFF1D0));
+        if (night) {
+          for (final st in [[4, 3], [11, 6], [19, 2], [27, 5], [33, 3], [37, 8], [8, 9], [24, 9]]) {
+            box(st[0] * u, st[1] * u, u * .7, u * .7, const Color(0xFFFFF6C8));
+          }
+          box(31 * u, 2 * u, 3 * u, 3 * u, const Color(0xFFFFF0B0));
+          box(32.2 * u, 1.6 * u, 2.6 * u, 2.6 * u, const Color(0xFF3A2F6B));
+        } else {
+          box(31 * u, 2.5 * u, 4 * u, 4 * u, const Color(0xFFFFE066));
+          for (final c in [[5, 4, 7], [16, 8, 5], [24, 3, 6]]) {
+            box(c[0] * u, c[1] * u, c[2] * u, 1.6 * u, Colors.white.withOpacity(.9));
+            box((c[0] + 1) * u, (c[1] - 1) * u, (c[2] - 2) * u, 1.6 * u, Colors.white.withOpacity(.9));
+          }
+        }
+        final g1 = [const Color(0xFF7CCB5B), const Color(0xFF6DBB4A), const Color(0xFFC8903A), const Color(0xFFEAF2F8)][season];
+        final g2 = [const Color(0xFF5FAE45), const Color(0xFF4F9B3A), const Color(0xFFA9742A), const Color(0xFFCFE0EE)][season];
+        ground(night ? Color.lerp(g1, Colors.black, .5)! : g1, night ? Color.lerp(g2, Colors.black, .5)! : g2);
+        for (var i = 0; i < 14; i++) {
+          box((i * 3.1 + 1) * u, gy + u * (1.5 + (i % 3) * 1.4), u * .8, u * .8, Color.lerp(g1, Colors.white, .22)!);
+        }
+        // ذرات فصلی: گلبرگ، برگ پاییزی، برف / کرم شب‌تاب
+        if (season != 1 || night) {
+          for (var i = 0; i < 16; i++) {
+            final x = ((i * 29) % 40 + math.sin(t * math.pi * 2 + i) * 1.2) * u;
+            final y = ((t * (.5 + (i % 4) * .18) + i * .173) % 1.0) * gy;
+            final c = season == 1 ? const Color(0xFFFFF27A).withOpacity(.5 + .5 * math.sin(t * math.pi * 4 + i).abs()) : [const Color(0xFFFFB3C7), Colors.white, const Color(0xFFE0762A), Colors.white][season];
+            box(x, season == 1 ? gy * (.5 + (i % 5) * .09) : y, u * .7, u * .7, c);
+          }
+        }
+    }
+  }
+
+  @override
+  bool shouldRepaint(ScenePainter o) => o.scene != scene || o.night != night || o.season != season;
+}
+
+class PetStage extends StatefulWidget {
+  final Map hero;
+  final VoidCallback onChanged;
+  const PetStage({super.key, required this.hero, required this.onChanged});
+  @override
+  State<PetStage> createState() => PetStageState();
+}
+
+class PetStageState extends State<PetStage> with TickerProviderStateMixin {
+  static final Map<String, int> _taps = {};
+  late final AnimationController _idle, _act, _wob, _hatch;
+  GItem? _food;
+  VoidCallback? _afterEat;
+  bool busy = false, _eaten = false;
+  int _bite = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _idle = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200))..repeat();
+    _act = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600));
+    _wob = AnimationController(vsync: this, duration: const Duration(milliseconds: 480));
+    _hatch = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600));
+    _act.addListener(() {
+      if (_food == null) return;
+      final t = _act.value;
+      if (t >= .3 && t < .75) {
+        final b = ((t - .3) / .45 * 4).floor();
+        if (b > _bite) {
+          _bite = b;
+          sfx('munch');
+        }
+      }
+      if (!_eaten && t >= .75) {
+        _eaten = true;
+        final cb = _afterEat;
+        _afterEat = null;
+        cb?.call();
+      }
+    });
+    _act.addStatusListener((st) {
+      if (st == AnimationStatus.completed) {
+        busy = false;
+        _food = null;
+        if (mounted) setState(() {});
+      }
+    });
+    _hatch.addStatusListener((st) {
+      if (st == AnimationStatus.completed) {
+        final h = widget.hero;
+        _taps.remove('${h['id']}');
+        Gm.hatched(h);
+        final rr = (h['rar'] as int?) ?? 0;
+        Gm.say('🐣 ${h['n']} به دنیا اومد!${rr == 2 ? '\n👑 پت افسانه‌ای!' : (rr == 1 ? '\n💎 پت نادر!' : '')}\nاز حالا ازش مراقبت کن و باهاش بزرگ شو.', true);
+        _hatch.reset();
+        widget.onChanged();
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(PetStage old) {
+    super.didUpdateWidget(old);
+    if (old.hero['id'] != widget.hero['id']) {
+      _act.reset();
+      _hatch.reset();
+      busy = false;
+      _food = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _idle.dispose();
+    _act.dispose();
+    _wob.dispose();
+    _hatch.dispose();
+    super.dispose();
+  }
+
+  void feed(GItem it, VoidCallback onEaten) {
+    if (busy) return;
+    busy = true;
+    _food = it;
+    _afterEat = onEaten;
+    _eaten = false;
+    _bite = 0;
+    _act.duration = const Duration(milliseconds: 2800);
+    _act.forward(from: 0);
+    setState(() {});
+  }
+
+  void react() {
+    if (busy) return;
+    busy = true;
+    _food = null;
+    _act.duration = const Duration(milliseconds: 1400);
+    _act.forward(from: 0);
+    setState(() {});
+  }
+
+  void _tapEgg() {
+    if (_hatch.isAnimating) return;
+    final id = '${widget.hero['id']}';
+    final t = (_taps[id] ?? 0) + 1;
+    _taps[id] = t;
+    sfx('crack');
+    _wob.forward(from: 0);
+    setState(() {});
+    if (t >= 3) {
+      Future.delayed(const Duration(milliseconds: 520), () {
+        if (!mounted) return;
+        sfx('hatch');
+        _hatch.forward(from: 0);
+      });
+    }
+  }
+
+  static const double S = 230;
+  static const double H = 280;
+
+  Widget _wrap(Widget child, {String? hint}) => SizedBox(
+      height: H,
+      width: double.infinity,
+      child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Stack(children: [
+            Positioned.fill(child: CustomPaint(painter: ScenePainter(Gm.bg, isNight(), seasonNow(), _idle))),
+            Align(alignment: const Alignment(0, .78), child: SizedBox(width: S, height: S, child: child)),
+            if (hint != null) Positioned(bottom: 8, left: 0, right: 0, child: Center(child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(12)), child: Text(hint, style: const TextStyle(color: Colors.white, fontSize: 12))))),
+          ])));
+
+  @override
+  Widget build(BuildContext context) {
+    final h = widget.hero;
+    if (h['hatched'] == false) return _eggView(h);
+    return _wrap(AnimatedBuilder(
+        animation: Listenable.merge([_idle, _act]),
+        builder: (c, _) {
+          final cell = S / 48;
+          final stage = stageOf((h['lv'] as int?) ?? 1);
+          final rar = (h['rar'] as int?) ?? 0;
+          final hungry = Gm.sat(h) < 25;
+          final aura = rar == 2 ? const Color(0xFFFFD35A) : (stage == 4 ? const Color(0xFF7CE8FF) : null);
+          final spr = petSprite('${h['a']}', stage, 'idle', rar);
+          var face = 'idle';
+          double jump = 0;
+          final t = _act.value;
+          final acting = _act.isAnimating;
+          final iv = _idle.value;
+          final widgets = <Widget>[];
+          final mouth = Offset(spr.mx * cell, spr.my * cell);
+          final hearts = <Widget>[];
+          if (acting && _food != null) {
+            if (t < .3) {
+              final e = Curves.easeIn.transform(t / .3);
+              final st = Offset(S * .98, -S * .02);
+              final pos = Offset(st.dx + (mouth.dx - st.dx) * e, st.dy + (mouth.dy - st.dy) * e - math.sin(e * math.pi) * S * .12);
+              widgets.add(Positioned(left: pos.dx - S * .1, top: pos.dy - S * .1, width: S * .2, height: S * .2, child: Transform.rotate(angle: e * 5, child: PxEmoji(_food!.emoji, S * .2))));
+            } else if (t < .75) {
+              final ph = (t - .3) / .45;
+              face = ((ph * 8).floor() % 2 == 0) ? 'eat' : 'eat2';
+              final left = 1 - ((ph * 4).floor()) * .24;
+              final sz = S * .2 * left.clamp(.1, 1.0);
+              widgets.add(Positioned(left: mouth.dx - sz / 2, top: mouth.dy - sz * .1, width: sz, height: sz, child: PxEmoji(_food!.emoji, sz)));
+              jump = -math.sin(ph * math.pi * 8).abs() * 3;
+            } else {
+              face = 'happy';
+            }
+          } else if (acting) {
+            face = 'happy';
+          } else if (isNight()) {
+            face = 'sleep';
+          } else if (hungry) {
+            face = 'sad';
+          } else if (iv > .91 && iv < .96) {
+            face = 'blink';
+          }
+          if (face == 'happy' && acting) {
+            final hp = _food != null ? ((t - .75) / .25).clamp(0.0, 1.0).toDouble() : t;
+            jump = -math.sin(hp * math.pi * 3).abs() * 16 * (1 - hp * .5);
+            for (var i = 0; i < 5; i++) {
+              final q = ((hp + i * .17) % 1.0);
+              hearts.add(Positioned(
+                  left: S * .5 + (i - 2) * 24 + math.sin(q * 6 + i) * 8 - 9,
+                  top: S * .3 - q * 70 - i * 6,
+                  child: Opacity(opacity: (1 - q).clamp(0.0, 1.0).toDouble(), child: const PxEmoji('❤️', 18))));
+            }
+          }
+          final bob = math.sin(iv * math.pi * 2) * 1.6 + jump;
+          final sq = 1 + math.sin(iv * math.pi * 2) * .015;
+          return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: react,
+              child: Stack(clipBehavior: Clip.none, children: [
+                if (aura != null) Positioned.fill(child: Container(decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [aura.withOpacity(.35 + .1 * math.sin(iv * math.pi * 2)), Colors.transparent])))),
+                if (rar == 2)
+                  for (var i = 0; i < 6; i++)
+                    Positioned(left: S * .5 + math.cos(iv * math.pi * 2 + i * math.pi / 3) * S * .4 - 9, top: S * .5 + math.sin(iv * math.pi * 2 + i * math.pi / 3) * S * .32 - 9, child: const Text('✨', style: TextStyle(fontSize: 18))),
+                Positioned(left: S * .27, right: S * .27, bottom: S * .03, height: S * .05, child: DecoratedBox(decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(S)))),
+                Transform(alignment: Alignment.bottomCenter, transform: Matrix4.diagonal3Values(1, sq, 1), child: petCanvas(h, size: S, face: face, bob: bob)),
+                ...widgets,
+                ...hearts,
+                if (hungry && !acting && face != 'sleep') Positioned(left: spr.hx * cell + 16, top: spr.hy * cell - 44 + math.sin(iv * math.pi * 4) * 3, child: const PxEmoji('🍖', 24)),
+                if (face == 'sleep') Positioned(left: spr.hx * cell + 18, top: spr.hy * cell - 40, child: const Text('💤', style: TextStyle(fontSize: 26))),
+              ]));
+        }));
+  }
+
+  Widget _eggView(Map h) {
+    final id = '${h['id']}';
+    final tp = _taps[id] ?? 0;
+    final sp = '${h['a']}';
+    final rar = (h['rar'] as int?) ?? 0;
+    return GestureDetector(
+        onTap: _tapEgg,
+        child: _wrap(
+            AnimatedBuilder(
+                animation: Listenable.merge([_wob, _hatch]),
+                builder: (c, _) {
+                  final hv = _hatch.value;
+                  if (_hatch.isAnimating && hv > 0) {
+                    final lim = <Widget>[];
+                    if (hv < .3) {
+                      final rot = math.sin(hv * 90) * .22;
+                      lim.add(Center(child: Container(width: S * (.3 + hv * 1.6), height: S * (.3 + hv * 1.6), decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [const Color(0xFFFFF2A0).withOpacity(.85 * hv / .3), Colors.transparent])))));
+                      lim.add(Transform.rotate(alignment: Alignment.bottomCenter, angle: rot, child: SizedBox(width: S, height: S, child: CustomPaint(painter: PxPainter(eggSprite(sp, 3, rar))))));
+                    } else {
+                      final e = Curves.easeOut.transform(((hv - .3) / .7).clamp(0.0, 1.0).toDouble());
+                      final shell = SizedBox(width: S, height: S, child: CustomPaint(painter: PxPainter(eggSprite(sp, 3, rar))));
+                      lim.add(Center(child: Container(width: S * (.9 + e * 1.4), height: S * (.9 + e * 1.4), decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [Colors.white.withOpacity((1 - e).clamp(0.0, 1.0) * .9), Colors.transparent])))));
+                      final pe = Curves.elasticOut.transform(((hv - .34) / .66).clamp(0.0, 1.0).toDouble());
+                      final babyH = Map<String, dynamic>.from(h)..['hatched'] = true;
+                      lim.add(Transform.scale(alignment: Alignment.bottomCenter, scale: pe, child: petCanvas(babyH, size: S, face: 'happy', bob: -math.sin(e * math.pi) * 26)));
+                      lim.add(Opacity(
+                          opacity: (1 - e).clamp(0.0, 1.0).toDouble(),
+                          child: Transform.translate(offset: Offset(-S * .3 * e, -S * .4 * e), child: Transform.rotate(angle: -1.0 * e, child: ClipRect(child: Align(alignment: Alignment.topCenter, heightFactor: .5, child: shell))))));
+                      lim.add(Opacity(
+                          opacity: (1 - e).clamp(0.0, 1.0).toDouble(),
+                          child: Transform.translate(offset: Offset(S * .28 * e, S * .22 * e), child: Transform.rotate(angle: .8 * e, child: ClipRect(child: Align(alignment: Alignment.bottomCenter, heightFactor: .5, child: shell))))));
+                      for (var i = 0; i < 10; i++) {
+                        final a = i / 10 * math.pi * 2, r = S * (.15 + e * .55);
+                        lim.add(Positioned(left: S / 2 + math.cos(a) * r - 9, top: S * .45 + math.sin(a) * r - 9, child: Opacity(opacity: (1 - e).clamp(0.0, 1.0).toDouble(), child: const Text('✨', style: TextStyle(fontSize: 18)))));
+                      }
+                    }
+                    return Stack(clipBehavior: Clip.none, children: lim);
+                  }
+                  final w = math.sin(_wob.value * math.pi * 6) * .2 * (1 - _wob.value);
+                  final eggW = Transform.rotate(alignment: Alignment.bottomCenter, angle: w, child: SizedBox(width: S, height: S, child: CustomPaint(painter: PxPainter(eggSprite(sp, tp.clamp(0, 3).toInt(), rar)))));
+                  if (rar == 0) return eggW;
+                  final gc = rar == 2 ? const Color(0xFFFFD35A) : const Color(0xFF7CC8FF);
+                  return Stack(clipBehavior: Clip.none, children: [
+                    Positioned.fill(child: Container(decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [gc.withOpacity(.4), Colors.transparent])))),
+                    eggW,
+                    for (var i = 0; i < 4; i++) Positioned(left: S * (.2 + i * .2), top: S * (.15 + (i % 2) * .5), child: const Text('✨', style: TextStyle(fontSize: 16))),
+                  ]);
+                }),
+            hint: _hatch.isAnimating ? null : '🥚 روی تخم بزن! (${(3 - tp).clamp(0, 3)} ضربه‌ی دیگه)'));
+  }
+}
+
+class FocusPet extends StatefulWidget {
+  final Map hero;
+  final bool running;
+  const FocusPet({super.key, required this.hero, required this.running});
+  @override
+  State<FocusPet> createState() => _FocusPetState();
+}
+
+class _FocusPetState extends State<FocusPet> with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  Timer? _tm;
+  int _msg = 0;
+  static const msgs = ['تمرکز کن، من کنارتم 📖', 'تو می‌تونی 💪', 'داری عالی پیش می‌ری!', 'یه کم دیگه مونده ✨', 'آفرین، حواست جمعه 👏'];
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(seconds: 3))..repeat();
+    _tm = Timer.periodic(const Duration(seconds: 7), (_) {
+      if (mounted && widget.running) setState(() => _msg = (_msg + 1) % msgs.length);
+    });
+  }
+
+  @override
+  void dispose() {
+    _tm?.cancel();
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final h = widget.hero;
+    final cs = Theme.of(context).colorScheme;
+    return AnimatedBuilder(
+        animation: _c,
+        builder: (c, _) {
+          final iv = _c.value;
+          final hatched = h['hatched'] != false;
+          final face = !hatched ? 'idle' : (Gm.sat(h) < 25 && !widget.running ? 'sad' : (iv > .9 && iv < .95 ? 'blink' : 'idle'));
+          return Column(children: [
+            if (widget.running)
+              Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(color: cs.secondaryContainer, borderRadius: BorderRadius.circular(14)),
+                  child: Text(msgs[_msg], style: TextStyle(color: cs.onSecondaryContainer))),
+            SizedBox(
+                width: 170,
+                height: 160,
+                child: Stack(alignment: Alignment.bottomCenter, children: [
+                  Positioned(top: 0, child: petCanvas(h, size: 150, face: face, bob: math.sin(iv * math.pi * 2) * 1.5)),
+                  if (widget.running && hatched) Positioned(bottom: 2, child: const PxEmoji('📖', 46)),
+                ])),
+          ]);
+        });
+  }
+}
+
+class _Fall {
+  double x, y, v;
+  String e;
+  int pts;
+  bool bad;
+  _Fall(this.x, this.y, this.v, this.e, this.pts, this.bad);
+}
+
+class CatchGame extends StatefulWidget {
+  final Map hero;
+  const CatchGame({super.key, required this.hero});
+  @override
+  State<CatchGame> createState() => _CatchGameState();
+}
+
+class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMixin {
+  late final Ticker _tk;
+  Duration _last = Duration.zero;
+  final _rnd = math.Random();
+  final items = <_Fall>[];
+  double px = .5, left = 25, spawn = .4, faceT = 0;
+  int score = 0, lives = 3;
+  bool over = false, started = false;
+  String result = '', face = 'idle';
+  static const total = 25.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _tk = createTicker(_tick)..start();
+  }
+
+  @override
+  void dispose() {
+    _tk.dispose();
+    super.dispose();
+  }
+
+  void _tick(Duration d) {
+    final dt = ((d - _last).inMicroseconds / 1e6).clamp(0.0, .05).toDouble();
+    _last = d;
+    if (over || !started) return;
+    left -= dt;
+    spawn -= dt;
+    faceT -= dt;
+    if (faceT <= 0) face = 'idle';
+    if (spawn <= 0) {
+      spawn = math.max(.28, .6 - (total - left) / total * .3);
+      final bad = _rnd.nextDouble() < .2;
+      const foods = ['🍎', '🐟', '🍖', '🍪', '🥚', '🍰'];
+      final fi = _rnd.nextInt(foods.length);
+      items.add(_Fall(.08 + _rnd.nextDouble() * .84, -.06, .38 + _rnd.nextDouble() * .2 + (total - left) / total * .25, bad ? '💣' : foods[fi], bad ? 0 : (fi == 5 ? 3 : 1), bad));
+    }
+    for (final it in items) {
+      it.y += it.v * dt;
+    }
+    items.removeWhere((it) {
+      if (it.y > .62 && it.y < .8 && (it.x - px).abs() < .14) {
+        if (it.bad) {
+          lives--;
+          face = 'sad';
+          sfx('delete');
+        } else {
+          score += it.pts;
+          face = 'happy';
+          sfx('munch');
+        }
+        faceT = .5;
+        return true;
+      }
+      return it.y > 1.05;
+    });
+    if (left <= 0 || lives <= 0) {
+      over = true;
+      _finish();
+    }
+    setState(() {});
+  }
+
+  void _finish() {
+    final key = 'mg:${ds(DateTime.now())}';
+    final plays = prefs.getInt(key) ?? 0;
+    if (plays >= 3) {
+      result = 'امتیاز $score\nسقف جایزه‌ی امروز (۳ بار) پر شده؛ فردا دوباره بیا!';
+    } else if (score > 0) {
+      prefs.setInt(key, plays + 1);
+      final c = math.min(25, score);
+      result = 'امتیاز $score\nجایزه: $c سکه 🪙';
+      Gm.earn(c, (score / 2).round());
+    } else {
+      result = 'امتیاز $score';
+    }
+    sfx(score > 10 ? 'hatch' : 'done');
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+      body: LayoutBuilder(builder: (c, cons) {
+        final W = cons.maxWidth, H = cons.maxHeight;
+        return GestureDetector(
+            onHorizontalDragUpdate: (d) => setState(() => px = (px + d.delta.dx / W).clamp(.1, .9).toDouble()),
+            child: Stack(children: [
+              Positioned.fill(child: CustomPaint(painter: ScenePainter(Gm.bg, isNight(), seasonNow(), const AlwaysStoppedAnimation<double>(0)))),
+              for (final it in items) Positioned(left: it.x * W - 20, top: it.y * H - 20, width: 40, height: 40, child: PxEmoji(it.e, 40)),
+              Positioned(left: px * W - 60, top: H * .8 - 112, width: 120, height: 120, child: petCanvas(widget.hero, size: 120, face: face)),
+              SafeArea(
+                  child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Row(children: [
+                        IconButton(icon: const Icon(Icons.close), color: Colors.white, onPressed: () => Navigator.pop(context)),
+                        Expanded(child: Text('امتیاز: $score', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 4)]))),
+                        Text('❤️' * lives, style: const TextStyle(fontSize: 18)),
+                        const SizedBox(width: 12),
+                        Text('${left.ceil().clamp(0, 99)}s', style: const TextStyle(color: Colors.white, fontSize: 18, shadows: [Shadow(blurRadius: 4)])),
+                        const SizedBox(width: 8),
+                      ]))),
+              if (!started || over)
+                Center(
+                    child: Card(
+                        child: Padding(
+                            padding: const EdgeInsets.all(20),
+                            child: Column(mainAxisSize: MainAxisSize.min, children: [
+                              Text(over ? 'بازی تموم شد' : 'گرفتن غذا 🍖', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 8),
+                              Text(over ? result : 'پتت رو با انگشت چپ و راست ببر و غذاها رو بگیر.\nاز 💣 دوری کن! ۳ جون داری.\nروزی ۳ بار جایزه‌ی سکه داره.', textAlign: TextAlign.center),
+                              const SizedBox(height: 12),
+                              FilledButton(
+                                  onPressed: () {
+                                    if (over) {
+                                      Navigator.pop(context);
+                                    } else {
+                                      setState(() => started = true);
+                                    }
+                                  },
+                                  child: Text(over ? 'بستن' : 'شروع')),
+                            ])))),
+            ]));
+      }));
 }
 
 final checkinReq = ValueNotifier<int>(0);
@@ -751,8 +1893,8 @@ Future<void> syncHomeWidget() async {
       });
     final hd = D.habits.where((h) => hDoneG(h, today)).length;
     final items = <Map>[
-      for (final k in top.take(20)) {'k': 't', 'id': '${k['id']}', 't': '${k['star'] == true ? '★ ' : ''}${k['t']}', 'd': false},
-      for (final h in D.habits) {'k': 'h', 'id': '${h['id']}', 't': '${h['t']}', 'd': hDoneG(h, today)},
+      for (final k in top.take(20)) {'k': 't', 'i': '☐', 'id': '${k['id']}', 't': '${k['star'] == true ? '★ ' : ''}${k['t']}', 'd': false},
+      for (final h in D.habits) {'k': 'h', 'i': hDoneG(h, today) ? '✅' : '🔥', 'id': '${h['id']}', 't': '${h['t']}', 'd': hDoneG(h, today)},
     ];
     // رنگ ویجت از رنگ برنامه
     final p = pals[(prefs.getInt('clr') ?? 0).clamp(0, pals.length - 1)];
@@ -1041,7 +2183,7 @@ class _BootstrapState extends State<Bootstrap> {
         ),
       );
     }
-    
+
     return const MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Konj Planner',
@@ -1140,7 +2282,7 @@ const _pages = [
   _GP(Icons.account_balance_wallet, 'مالی',
       '• با + هزینه یا درآمد ثبت کن. مبلغ خودش هر سه رقم با نقطه جدا می‌شه تا خوندنش راحت باشه.\n• دسته رو انتخاب کن؛ با «مدیریت دسته‌ها» خودت دسته اضافه یا حذف کن.\n• روی هر تراکنش بزنی می‌تونی مبلغ، دسته و تاریخش رو اصلاح کنی. با آیکون سطل یا کشیدن حذف می‌شه.\n• بالای صفحه جمع امروز، دیروز، این هفته، هفته‌ی قبل، این ماه و ماه قبل (با نام ماه شمسی) هست. با «تاریخچه» روزها، هفته‌ها و ماه‌های گذشته رو می‌بینی.\n• بودجه‌ی ماه جاری با میزان مصرف و باقی‌مانده هر دسته توی همین صفحه نشون داده می‌شه.'),
   _GP(Icons.timer, 'تمرکز و قهرمان',
-      '• در بخش تمرکز، مدت رو انتخاب کن و تایمر رو شروع کن؛ بعد از تموم شدنش سکه می‌گیری.\n• با انجام کارها، عادت‌ها و رسیدن به هدف هم سکه و تجربه می‌گیری.\n• در بخش قهرمان یه حیوون بساز و اسمش رو بذار. با سکه براش غذا و آیتم بخر. غذا تجربه می‌ده و سطحش رو بالا می‌بره.\n• زنجیره‌ی عادت‌ها و رسیدن به اهداف جایزه‌ی ویژه داره.\n• با آیکون 🙂 بالای صفحه، حال و خلاصه‌ی امروزت رو ثبت می‌کنی.'),
+      '• در بخش تمرکز، مدت رو انتخاب کن و تایمر رو شروع کن؛ بعد از تموم شدنش سکه می‌گیری.\n• با انجام کارها، عادت‌ها و رسیدن به هدف هم سکه و تجربه می‌گیری.\n• در بخش قهرمان یه حیوون بساز و اسمش رو بذار. با سکه براش غذا و آیتم بخر. غذا تجربه می‌ده و سطحش رو بالا می‌بره.\n• پت از تخم شروع می‌شه: سه بار روش بزن تا باز بشه. با بالا رفتن سطح بزرگ‌تر می‌شه و غذا و آیتم‌ها رو توی صحنه می‌بینی.\n• وقتی تمرکز روشنه نمی‌تونی از برنامه بیرون بری؛ اگه بری جلسه متوقف می‌شه.\n• پت سیری داره و کم‌کم گرسنه می‌شه؛ گرسنه که باشه تجربه‌ها نصف حساب می‌شن. پت سیر هنگام تمرکز ۲۵٪ سکه‌ی اضافه می‌ده.\n• تخم‌ها گاهی نادر 💎 یا افسانه‌ای 👑 درمیان؛ «تخم ویژه» حتماً یکی از این دوتاست. در سطح ۳۰ پت به شکل افسانه‌ای تکامل پیدا می‌کنه.\n• از فروشگاه می‌تونی پس‌زمینه‌ی غار، ساحل، قلعه یا فضا بخری. دشت پیش‌فرض با فصل‌ها عوض می‌شه.\n• مینی‌بازی «گرفتن غذا» روزی ۳ بار جایزه‌ی سکه داره.\n• زنجیره‌ی عادت‌ها و رسیدن به اهداف جایزه‌ی ویژه داره.\n• با آیکون 🙂 بالای صفحه، حال و خلاصه‌ی امروزت رو ثبت می‌کنی.'),
   _GP(Icons.settings, 'تنظیمات',
       'با آیکون چرخ‌دنده:\n• رنگ برنامه و حالت روشن/تیره (نارنجی با پس‌زمینه‌ی خاکستری تیره هم داریم)\n• نمایش تاریخ شمسی\n• روشن/خاموش کردن صدای محیط برنامه\n• پیام امیدبخش روزانه: ساعتش رو انتخاب کن. دکمه‌ی «ارسال آزمایشی» هم برای تست هست.\n• پشتیبان‌گیری: از اطلاعاتت کپی نگه دار و هر وقت خواستی بازیابی کن.'),
   _GP(Icons.notifications_active, 'اجازه‌ها',
@@ -1227,7 +2369,10 @@ class _Sub {
 }
 
 class _H extends State<Home> with WidgetsBindingObserver {
-  int tab = 0, cy = 1400, cm = 1, hv = 0, fMin = 25;
+  int tab = 0, cy = 1400, cm = 1, hv = 0, fMin = 25, fType = 0, fMon = 0;
+  final stageKey = GlobalKey<PetStageState>();
+  Uri? _pendingUri;
+  bool _booted = false, _viaWidget = false;
   Timer? _ft;
   DateTime? rf, rt;
   String q = '';
@@ -1243,9 +2388,22 @@ class _H extends State<Home> with WidgetsBindingObserver {
     _setCalFrom(sel);
     Gm.onEvent = _gmEvent;
     checkinReq.addListener(_onCheckinReq);
+    if ((prefs.getInt('fEnd') ?? 0) > 0) {
+      prefs.setInt('fEnd', 0);
+      prefs.setInt('fFail', 1);
+      notif.cancel(7777);
+    }
     _focusResume();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _booted = true;
+      if (_pendingUri != null) {
+        final u = _pendingUri;
+        _pendingUri = null;
+        _viaWidget = true;
+        Future.delayed(const Duration(milliseconds: 250), () => _widgetUri(u));
+      }
       _startup();
+      _checkFocusFail();
       if (checkinReq.value > 0) _onCheckinReq();
     });
   }
@@ -1290,7 +2448,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       return;
     }
     final now = DateTime.now(), today = ds(now);
-    if (prefs.getString('hopeDay') != today) {
+    if (prefs.getString('hopeDay') != today && !_viaWidget) {
       await prefs.setString('hopeDay', today);
       if (!mounted) return;
       await showDialog(
@@ -1330,7 +2488,51 @@ class _H extends State<Home> with WidgetsBindingObserver {
     }
   }
 
+  void _keepOn(bool on) {
+    try {
+      shakeCh.invokeMethod('keepOn', on);
+    } catch (_) {}
+  }
+
+  void _focusFail() {
+    prefs.setInt('fEnd', 0);
+    prefs.setInt('fFail', 1);
+    _ft?.cancel();
+    notif.cancel(7777);
+    _keepOn(false);
+    notif.show(7778, 'تمرکزت متوقف شد 😕', 'از برنامه بیرون رفتی؛ این جلسه سکه‌ای نداشت. دوباره امتحان کن!', nd);
+  }
+
+  void _checkFocusFail() {
+    if ((prefs.getInt('fFail') ?? 0) != 1) return;
+    prefs.setInt('fFail', 0);
+    if (!mounted) return;
+    sfx('fail');
+    setState(() => tab = 4);
+    showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              icon: const Text('😕', style: TextStyle(fontSize: 40)),
+              title: const Text('تمرکزت متوقف شد'),
+              content: const Text('وسط تمرکز از برنامه بیرون رفتی، برای همین این جلسه سکه‌ای نداشت. دفعه‌ی بعد گوشی رو کنار بذار و تا آخر بمون!'),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('باشه'))],
+            ));
+  }
+
   Future<void> _focusStart() async {
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('شروع تمرکز؟'),
+              content: Text('تا $fMin دقیقه‌ی آینده نمی‌تونی از این بخش بیرون بیای. اگه از برنامه خارج بشی، جلسه متوقف می‌شه و سکه‌ای نمی‌گیری.\n\nصفحه روشن می‌مونه.'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('شروع')),
+              ],
+            ));
+    if (ok != true) return;
+    _keepOn(true);
+    tab = 4;
     final end = DateTime.now().add(Duration(minutes: fMin)).millisecondsSinceEpoch;
     await prefs.setInt('fEnd', end);
     await prefs.setInt('fLen', fMin);
@@ -1344,6 +2546,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     prefs.setInt('fEnd', 0);
     _ft?.cancel();
     notif.cancel(7777);
+    _keepOn(false);
     Gm.focusDone(len);
     if (mounted) setState(() {});
   }
@@ -1363,6 +2566,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     await prefs.setInt('fEnd', 0);
     _ft?.cancel();
     notif.cancel(7777);
+    _keepOn(false);
     if (mounted) setState(() {});
   }
 
@@ -1378,7 +2582,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
   // برگشت به برنامه: تغییرهای ویجت (کار تیک‌خورده) دوباره خوانده می‌شود تا ذخیره‌ی بعدی روی‌شان نوشته نشود
   @override
   void didChangeAppLifecycleState(AppLifecycleState s) async {
+    if ((s == AppLifecycleState.paused || s == AppLifecycleState.hidden) && (prefs.getInt('fEnd') ?? 0) > 0) {
+      _focusFail();
+      return;
+    }
     if (s != AppLifecycleState.resumed) return;
+    _checkFocusFail();
     await prefs.reload();
     D.load();
     Gm.load();
@@ -1390,13 +2599,26 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   void _widgetUri(Uri? u) {
     if (u == null || !mounted) return;
-    if (u.host == 'addtask') {
-      setState(() => tab = 0);
-      taskSheet();
-    } else if (u.host == 'addtx') {
-      setState(() => tab = 3);
-      txSheet();
+    if (u.host != 'addtask' && u.host != 'addtx') return;
+    if (!_booted) {
+      _pendingUri = u;
+      return;
     }
+    if ((prefs.getInt('fEnd') ?? 0) > 0) {
+      toast('در حال تمرکز هستی!');
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      if (u.host == 'addtask') {
+        setState(() => tab = 0);
+        taskSheet();
+      } else {
+        setState(() => tab = 3);
+        txSheet();
+      }
+    });
   }
 
   void openGuide() => Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => const Guide()));
@@ -1623,7 +2845,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                           }),
                     ])));
           }));
-  
+
   Future<void> restoreDlg() async {
     final c = TextEditingController();
     final txt = await showDialog<String>(
@@ -1873,7 +3095,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
           ),
     ];
   }
-  
+
   // ── کارها ──
   void delTask(Map k) {
     sfx('delete');
@@ -2094,7 +3316,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       const SizedBox(height: 80),
     ]);
   }
-  
+
   // ── برنامه‌ی هفتگی و تقویم ──
   void delEvent(Map e) {
     sfx('delete');
@@ -2224,7 +3446,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       ],
     ]);
   }
-  
+
   // ── مالی ──
   void delTx(Map x) {
     sfx('delete');
@@ -2349,7 +3571,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   ])));
             }));
   }
-  
+
   // ── بازه‌های زمانی مالی بر اساس تقویم (شمسی یا میلادی) ──
   DateTime _monthFirst(DateTime now, int back) {
     if (jal) {
@@ -2591,31 +3813,189 @@ class _H extends State<Home> with WidgetsBindingObserver {
     });
   }
 
+  IconData catIcon(String c) {
+    if (c.contains('غذا') || c.contains('رستوران')) return Icons.restaurant;
+    if (c.contains('حمل') || c.contains('رفت')) return Icons.directions_car;
+    if (c.contains('خرید')) return Icons.shopping_bag_outlined;
+    if (c.contains('قبض')) return Icons.receipt_long;
+    if (c.contains('کار') || c.contains('حقوق')) return Icons.work_outline;
+    if (c.contains('وام')) return Icons.event_available;
+    if (c.contains('انتقال')) return Icons.swap_horiz;
+    if (c.contains('سلامت') || c.contains('درمان')) return Icons.favorite_border;
+    if (c.contains('سایر')) return Icons.category_outlined;
+    return Icons.label_outline;
+  }
+
+  void catSheet(String cat, List<Map> list) {
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => SafeArea(
+            child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Text(cat, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 6),
+                  Flexible(
+                      child: ListView(shrinkWrap: true, children: [
+                    for (final x in list)
+                      ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text((x['t'] ?? '') != '' ? '${x['t']}' : cat),
+                          subtitle: Text(fd(x['d']) + ((x['note'] ?? '').toString().isNotEmpty ? ' • ${x['note']}' : '')),
+                          trailing: Text(n(x['a'])),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            txSheet(x);
+                          }),
+                  ])),
+                ]))));
+  }
+
   Widget money() {
-    int sum(Iterable<Map> l, bool inc) => l.where((x) => x['inc'] == inc).fold(0, (p, x) => p + (x['a'] as int));
-    final fromS = rf == null ? null : ds(rf!), toS = rt == null ? null : ds(rt!);
+    final cs = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final months = [for (var i = 0; i < 12; i++) _monthFirst(now, i)];
+    final first = months[fMon], next = _monthFirst(now, fMon - 1);
+    final from = ds(first), to = ds(next);
+    final inc = fType == 1;
+    final txs = inRange(from, to).where((x) => (x['inc'] == true) == inc).toList();
+    final total = txs.fold<int>(0, (a, x) => a + (x['a'] as int));
+    int len;
+    if (jal) {
+      final j = g2j(first.year, first.month, first.day);
+      len = jmLen(j[0], j[1]);
+    } else {
+      len = DateTime(first.year, first.month + 1, 0).day;
+    }
+    final nb = (len / 7).ceil();
+    final buckets = List<int>.filled(nb, 0);
+    final byCat = <String, int>{};
+    for (final x in txs) {
+      final d = DateTime.parse(x['d']);
+      final day = jal ? g2j(d.year, d.month, d.day)[2] : d.day;
+      final i = ((day - 1) ~/ 7).clamp(0, nb - 1).toInt();
+      buckets[i] += x['a'] as int;
+      byCat['${x['c']}'] = (byCat['${x['c']}'] ?? 0) + (x['a'] as int);
+    }
+    final cats = byCat.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final mx = buckets.fold<int>(0, (a, v) => v > a ? v : a);
     final searching = q.isNotEmpty || rf != null;
+    final fromS = rf == null ? null : ds(rf!), toS = rt == null ? null : ds(rt!);
     final found = D.txs.where((x) {
       if (!'${x['t'] ?? ''} ${x['c']} ${x['note'] ?? ''}'.contains(q)) return false;
       final d = x['d'] as String;
-      if (fromS != null && d.compareTo(fromS) < 0) return false;
-      if (toS != null && d.compareTo(toS) > 0) return false;
-      return true;
+      if (searching) {
+        if (fromS != null && d.compareTo(fromS) < 0) return false;
+        if (toS != null && d.compareTo(toS) > 0) return false;
+        return true;
+      }
+      return d.compareTo(from) >= 0 && d.compareTo(to) < 0 && (x['inc'] == true) == inc;
     }).toList()
       ..sort((a, b) {
         final c = (b['d'] as String).compareTo(a['d']);
         return c != 0 ? c : (b['id'] as int).compareTo(a['id'] as int);
       });
-    return ListView(padding: const EdgeInsets.all(12), children: [
-      reportCard(),
+    Widget tabBtn(String t, int v) => Expanded(
+        child: InkWell(
+            onTap: () => setState(() => fType = v),
+            child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(border: Border(bottom: BorderSide(width: 3, color: fType == v ? cs.primary : Colors.transparent))),
+                child: Text(t, style: TextStyle(fontSize: 16, fontWeight: fType == v ? FontWeight.bold : FontWeight.normal, color: fType == v ? cs.primary : cs.outline)))));
+    final barColor = inc ? Colors.green : cs.primary;
+    return ListView(padding: const EdgeInsets.fromLTRB(12, 0, 12, 90), children: [
+      Row(children: [tabBtn('هزینه‌ها', 0), tabBtn('درآمدها', 1)]),
+      const Divider(height: 1),
+      SizedBox(
+          height: 56,
+          child: ListView(scrollDirection: Axis.horizontal, children: [
+            for (var i = 0; i < months.length; i++)
+              Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                  child: ChoiceChip(label: Text(monthLabel(months[i])), selected: fMon == i, showCheckmark: false, onSelected: (_) => setState(() => fMon = i))),
+          ])),
+      Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: cs.outlineVariant)),
+          child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(children: [
+                Row(children: [
+                  Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('${n(total)} تومان', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                    Text(inc ? 'مجموع درآمد ماه' : 'مجموع هزینه ماه', style: TextStyle(color: cs.outline)),
+                  ])),
+                  IconButton.filledTonal(icon: const Icon(Icons.bar_chart), tooltip: 'گزارش کامل‌تر', onPressed: reportSheet),
+                ]),
+                const SizedBox(height: 14),
+                SizedBox(
+                    height: 170,
+                    child: Stack(children: [
+                      for (final f in [0.0, .5, 1.0]) Positioned(left: 0, right: 0, top: f * 150, child: Divider(height: 1, color: cs.outlineVariant)),
+                      Positioned.fill(
+                          bottom: 20,
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                            for (final v in buckets)
+                              Expanded(
+                                  child: LayoutBuilder(
+                                      builder: (c, cons) => Column(mainAxisAlignment: MainAxisAlignment.end, children: [
+                                            if (v == mx && v > 0) Text(n(v), style: const TextStyle(fontSize: 10)),
+                                            Container(
+                                                height: mx == 0 ? 0 : (cons.maxHeight - 16) * v / mx,
+                                                margin: const EdgeInsets.symmetric(horizontal: 9),
+                                                decoration: BoxDecoration(color: barColor.withOpacity(.75), borderRadius: const BorderRadius.vertical(top: Radius.circular(8)))),
+                                          ])))
+                          ])),
+                      Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: Row(children: [
+                            for (var i = 0; i < nb; i++)
+                              Expanded(child: Text('${i * 7 + 1} تا ${math.min((i + 1) * 7, len)}', textAlign: TextAlign.center, style: TextStyle(fontSize: 10, color: cs.outline)))
+                          ])),
+                    ])),
+              ]))),
+      Card(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: cs.outlineVariant)),
+          child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                const Text('دسته‌بندی', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                if (cats.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('در این ماه تراکنشی نیست.', textAlign: TextAlign.center)),
+                for (final e in cats)
+                  InkWell(
+                      onTap: () => catSheet(e.key, txs.where((x) => '${x['c']}' == e.key).toList()),
+                      child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Column(children: [
+                            Row(children: [
+                              Icon(catIcon(e.key), color: barColor),
+                              const SizedBox(width: 10),
+                              Expanded(child: Text(e.key, style: const TextStyle(fontSize: 15))),
+                              Text('${n(e.value)} تومان'),
+                              const Icon(Icons.chevron_left),
+                            ]),
+                            const SizedBox(height: 6),
+                            Row(children: [
+                              SizedBox(width: 38, child: Text('${total == 0 ? 0 : (e.value * 100 / total).round()}٪', style: TextStyle(fontSize: 12, color: cs.outline))),
+                              Expanded(child: LinearProgressIndicator(value: total == 0 ? 0 : e.value / total, minHeight: 6, borderRadius: BorderRadius.circular(6), color: barColor)),
+                            ]),
+                          ]))),
+              ]))),
+      if (!inc && fMon == 0) budgetCard(),
+      const SizedBox(height: 4),
       TextField(
           decoration: InputDecoration(
               prefixIcon: const Icon(Icons.search),
-              hintText: 'جستجو در عنوان، توضیحات یا دسته',
-              suffixIcon: IconButton(icon: Icon(Icons.date_range, color: rf != null ? Theme.of(context).colorScheme.primary : null), tooltip: 'جستجو در بازه‌ی تاریخ', onPressed: pickRange)),
+              hintText: 'جستجو در همه‌ی تراکنش‌ها',
+              suffixIcon: IconButton(icon: Icon(Icons.date_range, color: rf != null ? cs.primary : null), tooltip: 'جستجو در بازه‌ی تاریخ', onPressed: pickRange)),
           onChanged: (v) => setState(() => q = v.trim())),
-      Wrap(spacing: 8, children: [
-        if (rf != null && rt != null)
+      if (rf != null && rt != null)
+        Wrap(children: [
           InputChip(
               avatar: const Icon(Icons.date_range, size: 18),
               label: Text('${fd(ds(rf!))} تا ${fd(ds(rt!))}'),
@@ -2624,13 +4004,14 @@ class _H extends State<Home> with WidgetsBindingObserver {
                     rf = null;
                     rt = null;
                   })),
-        OutlinedButton.icon(icon: const Icon(Icons.history), label: const Text('تاریخچه'), onPressed: historySheet),
-      ]),
+        ]),
       if (searching)
-        Card(child: ListTile(title: Text('${found.length} مورد'), subtitle: Text('درآمد ${n(sum(found, true))}  |  هزینه ${n(sum(found, false))}'), trailing: Text(n(sum(found, true) - sum(found, false)), style: const TextStyle(fontWeight: FontWeight.bold))))
-      else
-        budgetCard(),
-      for (final x in found.take(searching ? 500 : 30))
+        Card(
+            child: ListTile(
+                title: Text('${found.length} مورد'),
+                subtitle: Text('درآمد ${n(found.where((x) => x['inc'] == true).fold<int>(0, (a, x) => a + (x['a'] as int)))}  |  هزینه ${n(found.where((x) => x['inc'] != true).fold<int>(0, (a, x) => a + (x['a'] as int)))}'))),
+      Padding(padding: const EdgeInsets.fromLTRB(4, 10, 4, 2), child: Text(searching ? 'نتیجه‌ی جستجو' : 'تراکنش‌های این ماه', style: const TextStyle(fontWeight: FontWeight.bold))),
+      for (final x in found.take(300))
         Dismissible(
             key: ObjectKey(x),
             background: Container(color: Colors.red),
@@ -2645,7 +4026,6 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   Text(n(x['a'])),
                   IconButton(icon: const Icon(Icons.delete_outline), onPressed: () => delTx(x)),
                 ]))),
-      const SizedBox(height: 80),
     ]);
   }
 
@@ -2701,7 +4081,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
               for (final x in l.where((x) => x['inc'] != true)) {
                 byCat['${x['c']}'] = (byCat['${x['c']}'] ?? 0) + (x['a'] as int);
               }
-          final rows = byCat.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+              final rows = byCat.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
               final top = rows.isEmpty ? 1 : rows.first.value;
               final bg = budgets;
               final days = [for (var i = 6; i >= 0; i--) DateTime(now.year, now.month, now.day - i)];
@@ -2777,7 +4157,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
               ],
             ));
   }
-  
+
   void weekReview() {
     final now = DateTime.now();
     final from = ds(DateTime(now.year, now.month, now.day - 6));
@@ -2941,7 +4321,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                     }))),
     ];
   }
-  
+
   Widget sectionHead(String title, IconData icon, VoidCallback onAdd) => Padding(
       padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
       child: Row(children: [
@@ -2982,6 +4362,106 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 }),
           ])));
 
+  // ── بازبینی روز ──
+  Map<String, dynamic> readReviews() {
+    try {
+      return Map<String, dynamic>.from(jsonDecode(prefs.getString('reviews') ?? '{}') as Map);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> reviewSheet() async {
+    final now = DateTime.now(), day = ds(now);
+    final rv = readReviews();
+    final cur = rv[day] as Map?;
+    final good = TextEditingController(text: '${cur?['g'] ?? ''}');
+    final imp = TextEditingController(text: '${cur?['i'] ?? ''}');
+    final tom = TextEditingController(text: '${cur?['t'] ?? ''}');
+    await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
+              final doneT = D.tasks.where((k) => k['done'] == true && k['doneAt'] == day).length;
+              final hDn = D.habits.where((h) => hDoneG(h, day)).length;
+              final spent = D.txs.where((x) => x['inc'] != true && x['d'] == day).fold<int>(0, (a, x) => a + (x['a'] as int));
+              final earned = D.txs.where((x) => x['inc'] == true && x['d'] == day).fold<int>(0, (a, x) => a + (x['a'] as int));
+              final foc = prefs.getInt('fd:$day') ?? 0;
+              final open = D.tasks.where((k) => k['done'] != true).take(8).toList();
+              Widget stat(String e, String t) => Chip(label: Text('$e $t'), visualDensity: VisualDensity.compact);
+              final past = rv.keys.where((k) => k != day).toList()..sort((a, b) => b.compareTo(a));
+              return SafeArea(
+                  child: Padding(
+                      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+                      child: SingleChildScrollView(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+                        Text('بازبینی روز • ${fdl(now)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 8),
+                        Wrap(spacing: 6, children: [
+                          stat('✅', '$doneT کار انجام شد'),
+                          stat('🔥', 'عادت $hDn از ${D.habits.length}'),
+                          stat('🧠', '$foc دقیقه تمرکز'),
+                          stat('💸', 'هزینه ${n(spent)}'),
+                          if (earned > 0) stat('💰', 'درآمد ${n(earned)}'),
+                        ]),
+                        if (open.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          const Text('کارهای باقی‌مونده', style: TextStyle(fontWeight: FontWeight.bold)),
+                          for (final k in open)
+                            ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: Text('${k['t']}'),
+                                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  IconButton(tooltip: 'انجام شد', icon: const Icon(Icons.check_circle_outline), onPressed: () {
+                                    toggle(k);
+                                    set(() {});
+                                  }),
+                                  if (k['r'] != null)
+                                    IconButton(tooltip: 'انتقال به فردا', icon: const Icon(Icons.redo), onPressed: () {
+                                      try {
+                                        final d = DateTime.parse(k['r']);
+                                        k['r'] = DateTime(now.year, now.month, now.day + 1, d.hour, d.minute).toIso8601String();
+                                        upd();
+                                        scheduleAll();
+                                        set(() {});
+                                        toast('به فردا منتقل شد');
+                                      } catch (_) {}
+                                    }),
+                                  IconButton(tooltip: 'حذف', icon: const Icon(Icons.delete_outline), onPressed: () {
+                                    delTask(k);
+                                    set(() {});
+                                  }),
+                                ])),
+                        ],
+                        const SizedBox(height: 8),
+                        TextField(controller: good, maxLines: 2, decoration: const InputDecoration(labelText: 'امروز چی خوب پیش رفت؟')),
+                        TextField(controller: imp, maxLines: 2, decoration: const InputDecoration(labelText: 'چی رو می‌شه بهتر کرد؟')),
+                        TextField(controller: tom, maxLines: 2, decoration: const InputDecoration(labelText: 'سه اولویت فردا')),
+                        const SizedBox(height: 12),
+                        FilledButton(
+                            onPressed: () {
+                              rv[day] = {'g': good.text.trim(), 'i': imp.text.trim(), 't': tom.text.trim()};
+                              prefs.setString('reviews', jsonEncode(rv));
+                              if (Gm.rw.add('rv:$day')) Gm.earn(10, 20, '+۱۰ سکه برای بازبینی روز 🪙');
+                              Navigator.pop(ctx);
+                              toast('بازبینی ثبت شد');
+                            },
+                            child: const Text('ثبت بازبینی (+۱۰ سکه)')),
+                        if (past.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          const Text('بازبینی‌های قبلی', style: TextStyle(fontWeight: FontWeight.bold)),
+                          for (final k in past.take(5))
+                            ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(fd(k)),
+                                subtitle: Text('${(rv[k] as Map)['g'] ?? ''}\n${(rv[k] as Map)['t'] ?? ''}'.trim(), maxLines: 3, overflow: TextOverflow.ellipsis)),
+                        ],
+                      ]))));
+            }));
+  }
+
   // ── حال روز و خلاصه‌ی روز ──
   Future<void> checkinDialog() async {
     final now = DateTime.now(), day = ds(now);
@@ -3010,7 +4490,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                                 decoration: BoxDecoration(shape: BoxShape.circle, color: mood == i ? Theme.of(ctx).colorScheme.primaryContainer : null),
                                 child: Text(faces[i], style: const TextStyle(fontSize: 28))))
                     ]),
-                        const SizedBox(height: 14),
+                    const SizedBox(height: 14),
                     const Text('خلاصه‌ی امروز', style: TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 4),
                     Text('✅ کار انجام‌شده: $doneT   |   ☐ باقی‌مانده: $openT'),
@@ -3030,6 +4510,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   ])),
                   actions: [
                     TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('بعداً')),
+                    TextButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          reviewSheet();
+                        },
+                        child: const Text('بازبینی روز')),
                     FilledButton(
                         onPressed: () {
                           if (mood < 0) return;
@@ -3057,7 +4543,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
           child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(children: [
-                if (h != null) heroView(h, size: 70) else const Text('🎯', style: TextStyle(fontSize: 56)),
+                if (h != null) FocusPet(hero: h, running: running) else const Text('🎯', style: TextStyle(fontSize: 56)),
                 const SizedBox(height: 12),
                 if (running) ...[
                   SizedBox(
@@ -3090,96 +4576,133 @@ class _H extends State<Home> with WidgetsBindingObserver {
               style: TextStyle(fontSize: 12))),
     ]);
   }
-  
+
   // ── قهرمان ──
+  Future<void> playGame() async {
+    if (Gm.heroes.isEmpty) return;
+    final h = Gm.heroes[Gm.active];
+    if (h['hatched'] == false) {
+      toast('اول تخم رو باز کن 🥚');
+      return;
+    }
+    await Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => CatchGame(hero: h)));
+    if (mounted) setState(() {});
+  }
+
   Future<void> createHeroSheet() async {
     final first = Gm.heroes.isEmpty;
-    const cost = 150;
     var animal = gAnimals.first.id;
+    var premium = false;
     final name = TextEditingController();
     await showModalBottomSheet(
         context: context,
         isScrollControlled: true,
-        builder: (ctx) => StatefulBuilder(
-            builder: (ctx, set) => Padding(
-                padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
-                child: SingleChildScrollView(
-                    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  Text(first ? 'قهرمانت رو بساز' : 'قهرمان جدید (${n(cost)} سکه)', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 12),
-                  Wrap(alignment: WrapAlignment.center, spacing: 10, runSpacing: 10, children: [
-                    for (final a in gAnimals)
-                      ChoiceChip(
-                          label: Column(children: [Text(a.emoji, style: const TextStyle(fontSize: 34)), Text(a.name)]),
-                          selected: animal == a.id,
-                          onSelected: (_) => set(() => animal = a.id)),
-                  ]),
-                  const SizedBox(height: 8),
-                  Text('غذای محبوب ${animalById(animal).name}: ${gItems.where((i) => i.love == animalById(animal).love).map((i) => '${i.emoji} ${i.name}').join('، ')} (۱٫۵ برابر تجربه)', style: const TextStyle(fontSize: 12)),
-                  TextField(controller: name, decoration: const InputDecoration(labelText: 'اسم قهرمان')),
-                  const SizedBox(height: 12),
-                  FilledButton(
-                      onPressed: () {
-                        final nm = name.text.trim();
-                        if (nm.isEmpty) return;
-                        if (!first) {
+        builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
+              final cost = premium ? 400 : (first ? 0 : 150);
+              return Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+                  child: SingleChildScrollView(
+                      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    const Text('تخمت رو انتخاب کن 🥚', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(height: 12),
+                    Wrap(alignment: WrapAlignment.center, spacing: 10, runSpacing: 10, children: [
+                      for (final a in gAnimals)
+                        ChoiceChip(
+                            label: Column(children: [Text(a.emoji, style: const TextStyle(fontSize: 34)), Text(a.name)]),
+                            selected: animal == a.id,
+                            onSelected: (_) => set(() => animal = a.id)),
+                    ]),
+                    const SizedBox(height: 8),
+                    Text('غذای محبوب ${animalById(animal).name}: ${gItems.where((i) => i.love == animalById(animal).love).map((i) => '${i.emoji} ${i.name}').join('، ')} (۱٫۵ برابر تجربه)', style: const TextStyle(fontSize: 12)),
+                    const SizedBox(height: 8),
+                    SegmentedButton<bool>(
+                        segments: [
+                          ButtonSegment(value: false, label: Text(first ? 'تخم معمولی (رایگان)' : 'تخم معمولی (۱۵۰)')),
+                          const ButtonSegment(value: true, label: Text('تخم ویژه (۴۰۰)')),
+                        ],
+                        selected: {premium},
+                        onSelectionChanged: (v) => set(() => premium = v.first)),
+                    Text(premium ? '💎 حتماً نادر یا 👑 افسانه‌ای (۳۰٪ افسانه‌ای)' : 'شانس نادر ۲۲٪ و افسانه‌ای ۸٪ (رنگ‌ها و درخشش خاص)', style: const TextStyle(fontSize: 12)),
+                    TextField(controller: name, decoration: const InputDecoration(labelText: 'اسم پت')),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                        onPressed: () {
+                          final nm = name.text.trim();
+                          if (nm.isEmpty) return;
                           if (Gm.coins < cost) {
-                            toast('سکه‌ی کافی نداری');
+                            Navigator.pop(ctx);
+                            _noCoins(cost);
                             return;
                           }
                           Gm.coins -= cost;
-                        }
-                        Gm.create(animal, nm);
-                        sfx('add');
-                        Navigator.pop(ctx);
-                        setState(() {});
-                      },
-                      child: const Text('ساخت قهرمان')),
-                ])))));
+                          Gm.create(animal, nm, rollRarity(premium));
+                          sfx('add');
+                          Navigator.pop(ctx);
+                          setState(() {});
+                          toast('تخمت آماده‌ست! سه بار روش بزن 🥚');
+                        },
+                        child: Text(cost == 0 ? 'گرفتن تخم' : 'گرفتن تخم ($cost سکه)')),
+                  ])));
+            }));
+  }
+
+  void _noCoins(int price) {
+    sfx('delete');
+    toast('سکه‌ی کافی نداری 🪙 ${price - Gm.coins} سکه‌ی دیگه لازمه؛ با کار، عادت و تمرکز سکه جمع کن');
   }
 
   Widget heroTab() {
     final h = Gm.heroes.isEmpty ? null : Gm.heroes[Gm.active];
     final cs = Theme.of(context).colorScheme;
     final kids = <Widget>[
-      Card(child: ListTile(leading: const Text('🪙', style: TextStyle(fontSize: 30)), title: Text('${n(Gm.coins)} سکه'), subtitle: const Text('با انجام کارها، عادت‌ها و تمرکز سکه جمع کن'))),
+      Card(child: ListTile(leading: const PxEmoji('🪙', 34), title: Text('${n(Gm.coins)} سکه'), subtitle: const Text('با انجام کارها، عادت‌ها و تمرکز سکه جمع کن'))),
     ];
     if (h == null) {
       kids.add(Card(
           child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(children: [
-                const Text('🐾', style: TextStyle(fontSize: 60)),
+                const PxEmoji('🥚', 72),
                 const SizedBox(height: 8),
-                const Text('هنوز قهرمانی نداری', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Text('هنوز پتی نداری', style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
-                const Text('یه حیوون انتخاب کن، اسمش رو بذار و با کارهات بزرگش کن. سکه‌ها و تجربه‌هایی که تا حالا گرفتی هم حفظ می‌شن.', textAlign: TextAlign.center),
+                const Text('یه تخم انتخاب کن، سه بار روش بزن تا باز بشه و با کارهات پتت رو بزرگ کن. سکه‌ها و تجربه‌هایی که تا حالا گرفتی هم حفظ می‌شن.', textAlign: TextAlign.center),
                 const SizedBox(height: 12),
-                FilledButton.icon(icon: const Icon(Icons.add), label: const Text('ساخت قهرمان'), onPressed: createHeroSheet),
+                FilledButton.icon(icon: const Icon(Icons.add), label: const Text('گرفتن تخم'), onPressed: createHeroSheet),
               ]))));
     } else {
+      final hatched = h['hatched'] != false;
       final lv = h['lv'] as int, xp = h['xp'] as int, nd2 = Gm.need(lv);
       kids.add(SizedBox(
-          height: 48,
+          height: 52,
           child: ListView(scrollDirection: Axis.horizontal, children: [
             for (var i = 0; i < Gm.heroes.length; i++)
               Padding(
                   padding: const EdgeInsetsDirectional.only(end: 8),
                   child: ChoiceChip(
-                      label: Text('${animalById('${Gm.heroes[i]['a']}').emoji} ${Gm.heroes[i]['n']}'),
+                      avatar: SizedBox(width: 30, height: 30, child: petCanvas(Gm.heroes[i], size: 30)),
+                      label: Text('${Gm.heroes[i]['n']}'),
                       selected: Gm.active == i,
                       onSelected: (_) {
                         Gm.active = i;
                         Gm.save();
                         setState(() {});
                       })),
-            ActionChip(avatar: const Icon(Icons.add, size: 18), label: const Text('قهرمان جدید'), onPressed: createHeroSheet),
+            ActionChip(avatar: const Icon(Icons.add, size: 18), label: const Text('تخم جدید'), onPressed: createHeroSheet),
           ])));
+      kids.add(PetStage(key: stageKey, hero: h, onChanged: () {
+        if (mounted) setState(() {});
+      }));
+      if (hatched) {
+        final plays = prefs.getInt('mg:${ds(DateTime.now())}') ?? 0;
+        kids.add(Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: OutlinedButton.icon(icon: const Icon(Icons.sports_esports), label: Text('مینی‌بازی گرفتن غذا (${math.max(0, 3 - plays)} بار جایزه‌دار امروز)'), onPressed: playGame)));
+      }
       kids.add(Card(
           child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               child: Column(children: [
-                heroView(h, size: 110),
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                   Text('${h['n']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                   IconButton(
@@ -3193,11 +4716,24 @@ class _H extends State<Home> with WidgetsBindingObserver {
                         }
                       }),
                 ]),
-                Text('${animalById('${h['a']}').name} • سطح $lv', style: TextStyle(color: cs.outline)),
-                const SizedBox(height: 8),
-                LinearProgressIndicator(value: (xp / nd2).clamp(0.0, 1.0).toDouble(), minHeight: 10, borderRadius: BorderRadius.circular(8)),
-                const SizedBox(height: 4),
-                Text('تجربه: $xp از $nd2   (تا سطح بعد ${nd2 - xp})', style: const TextStyle(fontSize: 12)),
+                if (!hatched)
+                  Text('🥚 هنوز تخمه! سه بار روش بزن تا باز بشه', style: TextStyle(color: cs.outline))
+                else ...[
+                  Text('${animalById('${h['a']}').name} • ${stageNames[stageOf(lv)]} • سطح $lv${((h['rar'] as int?) ?? 0) == 2 ? ' • 👑 افسانه‌ای' : (((h['rar'] as int?) ?? 0) == 1 ? ' • 💎 نادر' : '')}', style: TextStyle(color: cs.outline)),
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    const Text('🍖 سیری '),
+                    Expanded(child: LinearProgressIndicator(value: Gm.sat(h) / 100, minHeight: 8, color: Gm.sat(h) < 25 ? Colors.red : Colors.orange, borderRadius: BorderRadius.circular(8))),
+                    Text(' ${Gm.sat(h).round()}٪'),
+                  ]),
+                  if (Gm.sat(h) < 25) const Text('پتت گرسنه‌ست! تا غذا نخوره تجربه‌ها نصف حساب می‌شن 😿', style: TextStyle(fontSize: 12, color: Colors.red)),
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(value: (xp / nd2).clamp(0.0, 1.0).toDouble(), minHeight: 10, borderRadius: BorderRadius.circular(8)),
+                  const SizedBox(height: 4),
+                  Text('تجربه: $xp از $nd2   (تا سطح بعد ${nd2 - xp})', style: const TextStyle(fontSize: 12)),
+                  if (stageOf(lv) < 4) Text('تا مرحله‌ی «${stageNames[stageOf(lv) + 1]}»: سطح ${const [5, 10, 18, 30][stageOf(lv)]}', style: TextStyle(fontSize: 12, color: cs.outline)),
+                ],
+                if (Gm.pool > 0) Text('${Gm.pool} تجربه برای بعد از باز شدن تخم ذخیره شده', style: const TextStyle(fontSize: 12)),
               ]))));
       kids.add(SegmentedButton<int>(
           segments: const [ButtonSegment(value: 0, label: Text('فروشگاه')), ButtonSegment(value: 1, label: Text('کوله‌پشتی')), ButtonSegment(value: 2, label: Text('جوایز'))],
@@ -3213,21 +4749,24 @@ class _H extends State<Home> with WidgetsBindingObserver {
             final lovedBy = it.love.isEmpty ? null : gAnimals.where((a) => a.love == it.love).firstOrNull?.name;
             kids.add(ListTile(
                 dense: true,
-                leading: Text(it.emoji, style: const TextStyle(fontSize: 30)),
+                leading: PxEmoji(it.emoji, 38),
                 title: Text(it.name),
                 subtitle: slot == 'food' ? Text('+${it.xp} تجربه${lovedBy != null ? ' • محبوب $lovedBy' : ''} • دارید: $owned') : null,
                 trailing: slot != 'food' && owned > 0
                     ? const Text('✓ داری')
                     : FilledButton.tonal(
-                        onPressed: Gm.coins >= it.price
-                            ? () {
-                                if (Gm.buy(it)) {
-                                  sfx('add');
-                                  toast('${it.name} خریده شد');
-                                  setState(() {});
-                                }
-                              }
-                            : null,
+                        onPressed: () {
+                          if (Gm.coins < it.price) {
+                            _noCoins(it.price);
+                            return;
+                          }
+                          if (Gm.buy(it)) {
+                            sfx('add');
+                            toast('${it.name} خریده شد');
+                            setState(() {});
+                            if (h['hatched'] != false && slot != 'food') stageKey.currentState?.react();
+                          }
+                        },
                         child: Text('${it.price} 🪙'))));
           }
         }
@@ -3237,31 +4776,62 @@ class _H extends State<Home> with WidgetsBindingObserver {
         final food = gItems.where((i) => i.slot == 'food' && (Gm.inv[i.id] ?? 0) > 0).toList();
         if (gear.isEmpty && food.isEmpty) kids.add(const Padding(padding: EdgeInsets.all(16), child: Text('کوله‌پشتی خالیه؛ از فروشگاه خرید کن.')));
         if (gear.isNotEmpty) kids.add(head('آیتم‌ها'));
-        for (final it in gear) {
-          final on = eq[it.slot] == it.id;
+        if (gear.any((i) => i.slot == 'bg'))
           kids.add(ListTile(
               dense: true,
-              leading: Text(it.emoji, style: const TextStyle(fontSize: 30)),
+              leading: const PxEmoji('🌳', 38),
+              title: const Text('دشت (پیش‌فرض)'),
+              subtitle: const Text('پس‌زمینه • فصل‌ها خودکار عوض می‌شن'),
+              trailing: Gm.bg == 'meadow'
+                  ? const Text('✓ فعال')
+                  : FilledButton.tonal(
+                      onPressed: () => setState(() {
+                            Gm.bg = 'meadow';
+                            Gm.save();
+                          }),
+                      child: const Text('انتخاب'))));
+        for (final it in gear) {
+          final on = it.slot == 'bg' ? Gm.bg == it.id : eq[it.slot] == it.id;
+          void tgl() {
+            if (!hatched) {
+              toast('اول تخم رو باز کن 🥚');
+              return;
+            }
+            setState(() => Gm.equip(h, it));
+            if (!on) {
+              sfx('add');
+              stageKey.currentState?.react();
+            }
+          }
+
+          kids.add(ListTile(
+              dense: true,
+              leading: PxEmoji(it.emoji, 38),
               title: Text(it.name),
               subtitle: Text(slotNames[it.slot]!),
-              trailing: on
-                  ? OutlinedButton(onPressed: () => setState(() => Gm.equip(h, it)), child: const Text('درآوردن'))
-                  : FilledButton.tonal(onPressed: () => setState(() => Gm.equip(h, it)), child: const Text('پوشاندن'))));
+              trailing: on ? OutlinedButton(onPressed: tgl, child: Text(it.slot == 'bg' ? 'غیرفعال' : 'درآوردن')) : FilledButton.tonal(onPressed: tgl, child: Text(it.slot == 'bg' ? 'انتخاب' : 'پوشاندن'))));
         }
         if (food.isNotEmpty) kids.add(head('غذاها'));
         for (final it in food) {
           final loved = it.love.isNotEmpty && animalById('${h['a']}').love == it.love;
           kids.add(ListTile(
               dense: true,
-              leading: Text(it.emoji, style: const TextStyle(fontSize: 30)),
+              leading: PxEmoji(it.emoji, 38),
               title: Text('${it.name} × ${Gm.inv[it.id]}'),
               subtitle: Text(loved ? '+${(it.xp * 1.5).round()} تجربه (محبوبشه 😍)' : '+${it.xp} تجربه'),
               trailing: FilledButton.tonal(
                   onPressed: () {
-                    final m = Gm.feed(h, it);
-                    sfx('done');
-                    if (m.isNotEmpty) toast(m);
-                    setState(() {});
+                    if (!hatched) {
+                      toast('اول تخم رو باز کن 🥚');
+                      return;
+                    }
+                    final st = stageKey.currentState;
+                    if (st == null || st.busy) return;
+                    st.feed(it, () {
+                      final m = Gm.feed(h, it);
+                      if (m.isNotEmpty) toast(m);
+                      if (mounted) setState(() {});
+                    });
                   },
                   child: const Text('بخوراند'))));
         }
@@ -3271,7 +4841,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
           final has = (Gm.inv[it.id] ?? 0) > 0;
           kids.add(ListTile(
               dense: true,
-              leading: Text(has ? it.emoji : '🔒', style: const TextStyle(fontSize: 30)),
+              leading: has ? PxEmoji(it.emoji, 38) : const Text('🔒', style: TextStyle(fontSize: 30)),
               title: Text(it.name),
               subtitle: Text(it.how),
               trailing: has ? const Icon(Icons.check_circle, color: Colors.green) : null));
@@ -3281,31 +4851,57 @@ class _H extends State<Home> with WidgetsBindingObserver {
     kids.add(const SizedBox(height: 80));
     return ListView(padding: const EdgeInsets.fromLTRB(12, 8, 12, 12), children: kids);
   }
-  
+
   @override
-  Widget build(BuildContext c) => Scaffold(
-        appBar: AppBar(title: Text(['کارها', 'تقویم', 'اهداف و عادت‌ها', 'مالی', 'تمرکز', 'قهرمان'][tab]), actions: [
-          TextButton(onPressed: () => setState(() => tab = 5), child: Text('🪙 ${n(Gm.coins)}')),
-          IconButton(icon: const Icon(Icons.mood), tooltip: 'حال و خلاصه‌ی امروز', onPressed: checkinDialog),
-          IconButton(icon: const Icon(Icons.help_outline), tooltip: 'راهنما', onPressed: openGuide),
-          IconButton(icon: const Icon(Icons.settings), tooltip: 'تنظیمات', onPressed: settings),
-        ]),
-        body: [tasks, cal, plan, money, focusTab, heroTab][tab](),
-        floatingActionButton: tab >= 4
-            ? null
-            : FloatingActionButton(onPressed: () => [() => taskSheet(), () => addEvent(), () => addPlan(), () => txSheet()][tab](), child: const Icon(Icons.add)),
-        bottomNavigationBar: NavigationBar(
-            selectedIndex: tab,
-            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-            onDestinationSelected: (i) => setState(() => tab = i),
-            destinations: const [
-              NavigationDestination(icon: Icon(Icons.checklist), label: 'کارها'),
-              NavigationDestination(icon: Icon(Icons.calendar_month), label: 'تقویم'),
-              NavigationDestination(icon: Icon(Icons.track_changes), label: 'اهداف'),
-              NavigationDestination(icon: Icon(Icons.account_balance_wallet), label: 'مالی'),
-              NavigationDestination(icon: Icon(Icons.timer), label: 'تمرکز'),
-              NavigationDestination(icon: Icon(Icons.pets), label: 'قهرمان'),
-            ]),
-      );
+  Widget build(BuildContext c) {
+    final locked = (prefs.getInt('fEnd') ?? 0) > 0;
+    void lockMsg() => toast('در حال تمرکز هستی! اول تمرکز رو تموم کن یا انصراف بده');
+    return PopScope(
+        canPop: !locked,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && locked) lockMsg();
+        },
+        child: Scaffold(
+          appBar: AppBar(title: Text(['کارها', 'تقویم', 'اهداف و عادت‌ها', 'مالی', 'تمرکز', 'پت من'][tab]), actions: [
+            TextButton(onPressed: locked ? lockMsg : () => setState(() => tab = 5), child: Text('🪙 ${n(Gm.coins)}')),
+            PopupMenuButton<String>(
+                icon: const Icon(Icons.event_note),
+                tooltip: 'حال و بازبینی روز',
+                enabled: !locked,
+                onSelected: (v) {
+                  if (v == 'mood') checkinDialog();
+                  if (v == 'review') reviewSheet();
+                  if (v == 'help') openGuide();
+                },
+                itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'mood', child: Text('حال و خلاصه‌ی امروز')),
+                      PopupMenuItem(value: 'review', child: Text('بازبینی روز')),
+                      PopupMenuItem(value: 'help', child: Text('راهنما')),
+                    ]),
+            IconButton(icon: const Icon(Icons.settings), tooltip: 'تنظیمات', onPressed: locked ? lockMsg : settings),
+          ]),
+          body: [tasks, cal, plan, money, focusTab, heroTab][tab](),
+          floatingActionButton: tab >= 4
+              ? null
+              : FloatingActionButton(onPressed: () => [() => taskSheet(), () => addEvent(), () => addPlan(), () => txSheet()][tab](), child: const Icon(Icons.add)),
+          bottomNavigationBar: NavigationBar(
+              selectedIndex: tab,
+              labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+              onDestinationSelected: (i) {
+                if (locked && i != 4) {
+                  lockMsg();
+                  return;
+                }
+                setState(() => tab = i);
+              },
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.checklist), label: 'کارها'),
+                NavigationDestination(icon: Icon(Icons.calendar_month), label: 'تقویم'),
+                NavigationDestination(icon: Icon(Icons.track_changes), label: 'اهداف'),
+                NavigationDestination(icon: Icon(Icons.account_balance_wallet), label: 'مالی'),
+                NavigationDestination(icon: Icon(Icons.timer), label: 'تمرکز'),
+                NavigationDestination(icon: Icon(Icons.pets), label: 'پت'),
+              ]),
+        ));
+  }
 }
-                      
