@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -25,6 +26,14 @@ class MainActivity : FlutterActivity() {
                 "hasOverlay" -> result.success(Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this))
                 "openOverlay" -> {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                    result.success(true)
+                }
+                "keepOn" -> {
+                    val on = call.arguments as? Boolean ?: false
+                    runOnUiThread {
+                        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
                     result.success(true)
                 }
                 else -> result.notImplemented()
