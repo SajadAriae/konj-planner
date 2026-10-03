@@ -39,7 +39,7 @@ class KonjPlannerWidgetProvider : HomeWidgetProvider() {
                 setInt(R.id.widget_add_task, "setBackgroundColor", acc)
                 setInt(R.id.widget_add_tx, "setBackgroundColor", acc)
 
-                // لیست اسکرول‌شونده‌ی کارها و عادت‌ها
+                // \u0644\u06CC\u0633\u062A \u0627\u0633\u06A9\u0631\u0648\u0644\u200C\u0634\u0648\u0646\u062F\u0647\u200C\u06CC \u06A9\u0627\u0631\u0647\u0627 \u0648 \u0639\u0627\u062F\u062A\u200C\u0647\u0627
                 val svc = Intent(context, KonjWidgetService::class.java).apply {
                     putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
                     data = Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
@@ -47,7 +47,7 @@ class KonjPlannerWidgetProvider : HomeWidgetProvider() {
                 setRemoteAdapter(R.id.widget_list, svc)
                 setEmptyView(R.id.widget_list, R.id.widget_empty)
 
-                // قالب کلیک ردیف‌ها: تیک زدن بدون باز شدن برنامه
+                // \u0642\u0627\u0644\u0628 \u06A9\u0644\u06CC\u06A9 \u0631\u062F\u06CC\u0641\u200C\u0647\u0627: \u062A\u06CC\u06A9 \u0632\u062F\u0646 \u0628\u062F\u0648\u0646 \u0628\u0627\u0632 \u0634\u062F\u0646 \u0628\u0631\u0646\u0627\u0645\u0647
                 val tpl = Intent().apply {
                     component = ComponentName(context, "es.antonborri.home_widget.HomeWidgetBackgroundReceiver")
                     action = "es.antonborri.home_widget.action.BACKGROUND"
