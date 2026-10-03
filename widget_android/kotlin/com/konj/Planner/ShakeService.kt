@@ -29,10 +29,10 @@ class ShakeService : Service(), SensorEventListener {
         super.onCreate()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(NotificationChannel("konj_shake", "تکان دادن برای باز کردن", NotificationManager.IMPORTANCE_LOW))
-            nm.createNotificationChannel(NotificationChannel("konj_shake_open", "باز کردن Konj Planner", NotificationManager.IMPORTANCE_HIGH))
+            nm.createNotificationChannel(NotificationChannel("konj_shake", "\u062A\u06A9\u0627\u0646 \u062F\u0627\u062F\u0646 \u0628\u0631\u0627\u06CC \u0628\u0627\u0632 \u06A9\u0631\u062F\u0646", NotificationManager.IMPORTANCE_LOW))
+            nm.createNotificationChannel(NotificationChannel("konj_shake_open", "\u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 Konj Planner", NotificationManager.IMPORTANCE_HIGH))
         }
-        val n = buildNotification("konj_shake", "Konj Planner آماده است", "گوشی رو تکون بده تا برنامه باز بشه", false)
+        val n = buildNotification("konj_shake", "Konj Planner \u0622\u0645\u0627\u062F\u0647 \u0627\u0633\u062A", "\u06AF\u0648\u0634\u06CC \u0631\u0648 \u062A\u06A9\u0648\u0646 \u0628\u062F\u0647 \u062A\u0627 \u0628\u0631\u0646\u0627\u0645\u0647 \u0628\u0627\u0632 \u0628\u0634\u0647", false)
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(4242, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -81,7 +81,7 @@ class ShakeService : Service(), SensorEventListener {
             } catch (_: Exception) {}
         }
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(4243, buildNotification("konj_shake_open", "باز کردن Konj Planner", "برای باز شدن برنامه اینجا بزن", true))
+        nm.notify(4243, buildNotification("konj_shake_open", "\u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 Konj Planner", "\u0628\u0631\u0627\u06CC \u0628\u0627\u0632 \u0634\u062F\u0646 \u0628\u0631\u0646\u0627\u0645\u0647 \u0627\u06CC\u0646\u062C\u0627 \u0628\u0632\u0646", true))
     }
 
     override fun onAccuracyChanged(s: Sensor?, a: Int) {}
