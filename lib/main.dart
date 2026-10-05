@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -21,12 +22,33 @@ final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/ح�
 bool jal = true;
 
 // ───────────────────────── صدای محیط برنامه ─────────────────────────
-final _sfxPlayer = AudioPlayer();
+final _sfxPool = <String, AudioPlayer>{};
+bool _sfxCtx = false;
+
+Future<void> sfxInit() async {
+  if (_sfxCtx) return;
+  _sfxCtx = true;
+  try {
+    // صدای برنامه از «صدای سیستم/اعلان» می‌آید، نه صدای مدیا
+    await AudioPlayer.global.setAudioContext(AudioContext(
+      android: AudioContextAndroid(isSpeakerphoneOn: false, stayAwake: false, contentType: AndroidContentType.sonification, usageType: AndroidUsageType.assistanceSonification, audioFocus: AndroidAudioFocus.none),
+      iOS: AudioContextIOS(category: AVAudioSessionCategory.ambient, options: const <AVAudioSessionOptions>{}),
+    ));
+  } catch (_) {}
+}
+
 Future<void> sfx(String name) async {
   try {
     if (!(prefs.getBool('sfx') ?? true)) return;
-    await _sfxPlayer.stop();
-    await _sfxPlayer.play(AssetSource('sounds/$name.wav'));
+    await sfxInit();
+    var p = _sfxPool[name];
+    if (p == null) {
+      p = AudioPlayer();
+      await p.setPlayerMode(PlayerMode.lowLatency);
+      _sfxPool[name] = p;
+    }
+    await p.stop();
+    await p.play(AssetSource('sounds/$name.wav'));
   } catch (_) {}
 }
 
@@ -143,6 +165,10 @@ const gItems = [
   GItem('fd_steak', 'استیک', '🥩', 'food', price: 22, xp: 38, love: 'steak'),
   GItem('fd_cake', 'کیک', '🍰', 'food', price: 45, xp: 70),
   GItem('fd_feast', 'سفره‌ی ویژه', '🍲', 'food', price: 90, xp: 150),
+  GItem('sf_pumpkin', 'کدو حلوایی', '🎃', 'food', price: 40, xp: 130),
+  GItem('sf_melon', 'هندوانه', '🍉', 'food', price: 40, xp: 130),
+  GItem('sf_grape', 'انگور', '🍇', 'food', price: 40, xp: 130),
+  GItem('sf_ice', 'بستنی', '🍦', 'food', price: 40, xp: 130),
   GItem('h_cap', 'کپ', '🧢', 'hat', price: 30),
   GItem('h_straw', 'کلاه حصیری', '👒', 'hat', price: 50),
   GItem('h_top', 'کلاه سیلندر', '🎩', 'hat', price: 60),
@@ -171,6 +197,7 @@ const gItems = [
   GItem('bg_castle', 'قلعه', '🏰', 'bg', price: 220),
   GItem('bg_space', 'فضا', '🪐', 'bg', price: 300),
   // جایزه‌های ویژه (فقط با دستاورد باز می‌شن)
+  GItem('sp_album', 'نشان آلبوم‌دار', '🎖️', 'neck', how: 'کامل کردن آلبوم: یک پت معمولی از هر ۶ گونه'),
   GItem('sp_streak7', 'شعله‌ی ثبات', '🔥', 'neck', how: 'نگه‌داشتن زنجیره‌ی یک عادت به مدت ۷ روز'),
   GItem('sp_streak30', 'جام ثابت‌قدم', '🏆', 'hand', how: 'نگه‌داشتن زنجیره‌ی یک عادت به مدت ۳۰ روز'),
   GItem('sp_streak100', 'نشان ستاره‌ای', '🌟', 'hat', how: 'نگه‌داشتن زنجیره‌ی یک عادت به مدت ۱۰۰ روز'),
@@ -179,6 +206,12 @@ const gItems = [
   GItem('sp_focus10', 'هاله‌ی تمرکز', '🌀', 'back', how: 'جمع شدن ۱۰ ساعت تمرکز'),
   GItem('sp_lvl10', 'الماس قهرمانی', '💎', 'neck', how: 'رسیدن یکی از قهرمان‌ها به سطح ۱۰'),
 ];
+
+int foodSat(GItem it) => (it.xp * .8).round();
+
+int subPct(List<_Sub> s) => s.isEmpty ? -1 : (s.where((x) => x.done).length * 100 / s.length).round();
+
+String weeklySpecialId() => const ['sf_pumpkin', 'sf_melon', 'sf_grape', 'sf_ice'][(DateTime.now().millisecondsSinceEpoch ~/ 604800000) % 4];
 
 GItem? itemById(String id) => gItems.where((i) => i.id == id).firstOrNull;
 GAnimal animalById(String id) => gAnimals.firstWhere((a) => a.id == id, orElse: () => gAnimals.first);
@@ -208,6 +241,7 @@ int focusCoins(int min) => (min * 0.4).round();
 class Gm {
   static int coins = 0, active = 0, focusTotal = 0, pool = 0;
   static String bg = 'meadow';
+  static Set<String> album = {};
   static List<Map> heroes = [];
   static Map<String, int> inv = {};
   static Set<String> rw = {};
@@ -238,6 +272,7 @@ class Gm {
     focusTotal = 0;
     pool = 0;
     bg = 'meadow';
+    album = {};
     try {
       final raw = prefs.getString('hero');
       if (raw != null && raw.isNotEmpty) {
@@ -247,6 +282,7 @@ class Gm {
         focusTotal = (m['focus'] as num?)?.toInt() ?? 0;
         pool = (m['pool'] as num?)?.toInt() ?? 0;
         bg = '${m['bg'] ?? 'meadow'}';
+        album = {for (final e in (m['album'] as List? ?? [])) '$e'};
         heroes = (m['heroes'] as List? ?? []).map<Map>((e) => Map<String, dynamic>.from(e as Map)).toList();
         inv = {for (final e in (m['inv'] as Map? ?? {}).entries) '${e.key}': (e.value as num).toInt()};
         rw = {for (final e in (m['rw'] as List? ?? [])) '$e'};
@@ -257,6 +293,7 @@ class Gm {
       h['lv'] ??= 1;
       h['xp'] ??= 0;
       if (h['satT'] == null) setSat(h, 80);
+      if (h['hatched'] != false) album.add('${h['a']}|${(h['rar'] as int?) ?? 0}');
     }
     active = heroes.isEmpty ? 0 : active.clamp(0, heroes.length - 1).toInt();
   }
@@ -264,7 +301,8 @@ class Gm {
   static Future<void> save() async {
     final cut = ds(DateTime.now().subtract(const Duration(days: 45)));
     rw.removeWhere((k) => k.startsWith('h:') && k.split(':').last.compareTo(cut) < 0);
-    await prefs.setString('hero', jsonEncode({'coins': coins, 'active': active, 'focus': focusTotal, 'pool': pool, 'heroes': heroes, 'inv': inv, 'rw': rw.toList(), 'bg': bg}));
+    syncPetWidget();
+    await prefs.setString('hero', jsonEncode({'coins': coins, 'active': active, 'focus': focusTotal, 'pool': pool, 'heroes': heroes, 'inv': inv, 'rw': rw.toList(), 'bg': bg, 'album': album.toList()}));
   }
 
   static void addXp(int x, {bool raw = false}) {
@@ -314,12 +352,14 @@ class Gm {
     k['rw'] = true;
     final c = k['star'] == true ? 8 : 5;
     earn(c, c * 2, '+$c سکه 🪙');
+    Mn.inc('tasks');
   }
 
   static void habitDone(Map h, String day) {
     final key = 'h:${h['id']}:$day';
     if (!rw.add(key)) return;
     earn(4, 8, '+۴ سکه 🪙');
+    Mn.inc('habits');
     final s = streakG(h);
     const ms = {7: 40, 14: 80, 30: 200, 60: 400, 100: 800, 365: 3000};
     for (final e in ms.entries) {
@@ -348,10 +388,23 @@ class Gm {
     final dk = 'fd:${ds(DateTime.now())}';
     prefs.setInt(dk, (prefs.getInt(dk) ?? 0) + min);
     final comp = heroes.isNotEmpty && heroes[active]['hatched'] != false && sat(heroes[active]) >= 25;
-    final c = focusCoins(min) + (comp ? (focusCoins(min) * .25).round() : 0);
+    final rk = 'fr:${ds(DateTime.now())}';
+    final used = prefs.getInt(rk) ?? 0;
+    final el = math.max(0, math.min(min, 180 - used));
+    prefs.setInt(rk, used + el);
+    final c = focusCoins(el) + (comp ? (focusCoins(el) * .25).round() : 0);
     coins += c;
-    addXp(min);
-    say('🧠 $min دقیقه تمرکز کامل شد!\n+$c سکه${comp ? ' (با پاداش پت همراه)' : ''} و +$min تجربه', true);
+    Mn.inc('focusMin', min);
+    Mn.inc('focusN');
+    final hr = DateTime.now().subtract(Duration(minutes: min)).hour;
+    Map fh = {};
+    try {
+      fh = jsonDecode(prefs.getString('fh') ?? '{}') as Map;
+    } catch (_) {}
+    fh['$hr'] = ((fh['$hr'] as int?) ?? 0) + min;
+    prefs.setString('fh', jsonEncode(fh));
+    addXp(el);
+    say('🧠 $min دقیقه تمرکز کامل شد!\n+$c سکه${comp ? ' (با پاداش پت همراه)' : ''} و +$el تجربه${el < min ? '\n(سقف پاداش روزانه‌ی تمرکز ۱۸۰ دقیقه است)' : ''}', true);
     checkSpecials();
     save();
   }
@@ -359,6 +412,31 @@ class Gm {
   static void checkin(String day) {
     if (!rw.add('m:$day')) return;
     earn(5, 10, '+۵ سکه برای ثبت حال روز 🪙');
+  }
+
+  static bool ownsColor(Map h, int i) => i == 0 || ((h['cols'] as List?) ?? const []).contains(i);
+
+  static bool buyColor(Map h, int i) {
+    final c = petColors[i];
+    if (coins < c.price) return false;
+    coins -= c.price;
+    final l = <int>[for (final e in ((h['cols'] as List?) ?? const [])) e as int]..add(i);
+    h['cols'] = l;
+    h['col'] = i;
+    save();
+    return true;
+  }
+
+  static void setColor(Map h, int i) {
+    h['col'] = i;
+    save();
+  }
+
+  static void sell(Map h) {
+    coins += petValue(h);
+    heroes.remove(h);
+    active = heroes.isEmpty ? 0 : active.clamp(0, heroes.length - 1).toInt();
+    save();
   }
 
   static bool buy(GItem it) {
@@ -395,7 +473,8 @@ class Gm {
       // غذا همیشه به قهرمان فعال می‌رسد
     }
     addXp(x, raw: true);
-    setSat(h, math.min(100.0, sat(h) + it.xp * .8));
+    Mn.inc('feed');
+    setSat(h, math.min(100.0, sat(h) + foodSat(it)));
     save();
     return loved ? '${h['n']} عاشق ${it.name} بود! +$x تجربه 😍' : '+$x تجربه برای ${h['n']}';
   }
@@ -411,6 +490,7 @@ class Gm {
   // بعد از باز شدن تخم: تجربه‌ی جمع‌شده به پت می‌رسد
   static void hatched(Map h) {
     h['hatched'] = true;
+    album.add('${h['a']}|${(h['rar'] as int?) ?? 0}');
     setSat(h, 70);
     if (pool > 0) {
       final p = pool;
@@ -451,57 +531,81 @@ int _shade(int c, double f) {
 List<int> _tones(int c) => [_shade(c, 1.3), c, _shade(c, .68)];
 
 class Px {
-  final int w, h;
+  final int w, h, k;
   final List<int> p;
-  Px(this.w, this.h) : p = List<int>.filled(w * h, 0);
-  void set(int x, int y, int c) {
+  Px(int vw, int vh, {this.k = 2})
+      : w = vw * k,
+        h = vh * k,
+        p = List<int>.filled(vw * k * vh * k, 0);
+
+  void setR(int x, int y, int c) {
     if (x >= 0 && y >= 0 && x < w && y < h) p[y * w + x] = c;
   }
 
-  int get(int x, int y) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : p[y * w + x];
+  int getR(int x, int y) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : p[y * w + x];
+
+  void set(int x, int y, int c) {
+    for (var j = 0; j < k; j++) {
+      for (var i = 0; i < k; i++) {
+        setR(x * k + i, y * k + j, c);
+      }
+    }
+  }
 
   void ell(double cx, double cy, double rx, double ry, List<int> t, {bool onlyOn = false}) {
     if (rx < .5 || ry < .5) return;
-    for (var y = (cy - ry).floor(); y <= (cy + ry).ceil(); y++) {
-      for (var x = (cx - rx).floor(); x <= (cx + rx).ceil(); x++) {
-        final dx = (x + .5 - cx) / rx, dy = (y + .5 - cy) / ry;
+    final X = cx * k, Y = cy * k, RX = rx * k, RY = ry * k;
+    for (var y = (Y - RY).floor(); y <= (Y + RY).ceil(); y++) {
+      for (var x = (X - RX).floor(); x <= (X + RX).ceil(); x++) {
+        final dx = (x + .5 - X) / RX, dy = (y + .5 - Y) / RY;
         if (dx * dx + dy * dy > 1) continue;
-        if (onlyOn && get(x, y) == 0) continue;
+        if (onlyOn && getR(x, y) == 0) continue;
         final l = -dx * .55 - dy * .8;
-        set(x, y, l > .38 ? t[0] : (l > -.3 ? t[1] : t[2]));
+        setR(x, y, l > .38 ? t[0] : (l > -.3 ? t[1] : t[2]));
       }
     }
   }
 
   void rect(int x0, int y0, int x1, int y1, int c) {
-    for (var y = y0; y <= y1; y++) {
-      for (var x = x0; x <= x1; x++) {
-        set(x, y, c);
+    for (var y = y0 * k; y < (y1 + 1) * k; y++) {
+      for (var x = x0 * k; x < (x1 + 1) * k; x++) {
+        setR(x, y, c);
       }
     }
   }
 
   void tri(double x0, double y0, double x1, double y1, double x2, double y2, List<int> t) {
+    x0 *= k;
+    y0 *= k;
+    x1 *= k;
+    y1 *= k;
+    x2 *= k;
+    y2 *= k;
     final minX = math.min(x0, math.min(x1, x2)).floor(), maxX = math.max(x0, math.max(x1, x2)).ceil();
     final minY = math.min(y0, math.min(y1, y2)).floor(), maxY = math.max(y0, math.max(y1, y2)).ceil();
     double sg(double ax, double ay, double bx, double by, double cx, double cy) => (ax - cx) * (by - cy) - (bx - cx) * (ay - cy);
     final cyc = (y0 + y1 + y2) / 3;
     for (var y = minY; y <= maxY; y++) {
       for (var x = minX; x <= maxX; x++) {
-        final px = x + .5, py = y + .5;
-        final d1 = sg(px, py, x0, y0, x1, y1), d2 = sg(px, py, x1, y1, x2, y2), d3 = sg(px, py, x2, y2, x0, y0);
+        final qx = x + .5, qy = y + .5;
+        final d1 = sg(qx, qy, x0, y0, x1, y1), d2 = sg(qx, qy, x1, y1, x2, y2), d3 = sg(qx, qy, x2, y2, x0, y0);
         final neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
         if (neg && pos) continue;
-        set(x, y, py < cyc - .6 ? t[0] : (py > cyc + 1.6 ? t[2] : t[1]));
+        setR(x, y, qy < cyc - .6 * k ? t[0] : (qy > cyc + 1.6 * k ? t[2] : t[1]));
       }
     }
   }
 
   void line(double x0, double y0, double x1, double y1, int c) {
-    final n = math.max((x1 - x0).abs(), (y1 - y0).abs()).ceil();
+    final n = (math.max((x1 - x0).abs(), (y1 - y0).abs()) * k).ceil();
     for (var i = 0; i <= n; i++) {
       final t = n == 0 ? 0.0 : i / n;
-      set((x0 + (x1 - x0) * t).floor(), (y0 + (y1 - y0) * t).floor(), c);
+      final sx = ((x0 + (x1 - x0) * t) * k).floor(), sy = ((y0 + (y1 - y0) * t) * k).floor();
+      for (var j = 0; j < k; j++) {
+        for (var q = 0; q < k; q++) {
+          setR(sx + q, sy + j, c);
+        }
+      }
     }
   }
 
@@ -538,9 +642,35 @@ class PxPainter extends CustomPainter {
   bool shouldRepaint(PxPainter old) => old.px != px;
 }
 
+final _pxImgs = <Px, ui.Image>{};
+final _pxFutures = <Px, Future<ui.Image>>{};
+Future<ui.Image> pxImage(Px px) => _pxFutures.putIfAbsent(px, () => _pxToImage(px).then((i) {
+      _pxImgs[px] = i;
+      return i;
+    }));
+
+// پیکسل‌آرت به‌شکل یک تصویر ثابت (سبک و بدون لگ)
+class PxView extends StatelessWidget {
+  final Px px;
+  const PxView(this.px, {super.key});
+  @override
+  Widget build(BuildContext context) {
+    final im = _pxImgs[px];
+    if (im != null) return RawImage(image: im, fit: BoxFit.fill, filterQuality: FilterQuality.none);
+    return FutureBuilder<ui.Image>(
+        future: pxImage(px),
+        builder: (c, snap) => snap.hasData ? RawImage(image: snap.data, fit: BoxFit.fill, filterQuality: FilterQuality.none) : CustomPaint(painter: PxPainter(px)));
+  }
+}
+
 // ایموجی → پیکسل‌آرت سه‌بعدی (ضخامت + سایه + خط دور)
 final _pxFut = <String, Future<ui.Image>>{};
-Future<ui.Image> pixelEmoji(String e, [int g = 18]) => _pxFut.putIfAbsent('$e|$g', () => _mkPixelEmoji(e, g));
+final _pxImgCache = <String, ui.Image>{};
+const int kEmojiG = 26;
+Future<ui.Image> pixelEmoji(String e, [int g = kEmojiG]) => _pxFut.putIfAbsent('$e|$g', () => _mkPixelEmoji(e, g).then((i) {
+      _pxImgCache['$e|$g'] = i;
+      return i;
+    }));
 
 Future<ui.Image> _pxToImage(Px px) {
   final bytes = Uint8List(px.w * px.h * 4);
@@ -565,7 +695,7 @@ Future<ui.Image> _mkPixelEmoji(String e, int g) async {
   final img = await rec.endRecording().toImage(g, g);
   final bd = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
   final o = g + 5;
-  final out = Px(o, o);
+  final out = Px(o, o, k: 1);
   if (bd != null) {
     final src = bd.buffer.asUint8List();
     final mask = List<bool>.filled(g * g, false);
@@ -603,11 +733,15 @@ class PxEmoji extends StatelessWidget {
   final double size;
   const PxEmoji(this.e, this.size, {super.key});
   @override
-  Widget build(BuildContext context) => FutureBuilder<ui.Image>(
-      future: pixelEmoji(e),
-      builder: (c, snap) => snap.hasData
-          ? RawImage(image: snap.data, width: size, height: size, fit: BoxFit.contain, filterQuality: FilterQuality.none)
-          : SizedBox(width: size, height: size));
+  Widget build(BuildContext context) {
+    final im = _pxImgCache['$e|$kEmojiG'];
+    if (im != null) return RawImage(image: im, width: size, height: size, fit: BoxFit.contain, filterQuality: FilterQuality.none);
+    return FutureBuilder<ui.Image>(
+        future: pixelEmoji(e),
+        builder: (c, snap) => snap.hasData
+            ? RawImage(image: snap.data, width: size, height: size, fit: BoxFit.contain, filterQuality: FilterQuality.none)
+            : SizedBox(width: size, height: size));
+  }
 }
 
 // ── پت‌های پیکسلی ──
@@ -625,7 +759,36 @@ int _hueRot(int c, double deg) {
   return hsv.withHue((hsv.hue + deg) % 360).withSaturation(math.max(hsv.saturation, .38)).toColor().toARGB32();
 }
 
-List<int> _palFor(String sp, int rar) {
+class PColor {
+  final String name;
+  final int price;
+  final List<int> pal;
+  const PColor(this.name, this.price, this.pal);
+}
+
+const petColors = [
+  PColor('پیش‌فرض', 0, []),
+  PColor('آبی', 60, [0xFF5B9BE8, 0xFFDDEBFF, 0xFF2F5FA8]),
+  PColor('بنفش', 60, [0xFF9B6BE0, 0xFFEBDDFF, 0xFF5E3AA8]),
+  PColor('صورتی', 60, [0xFFF08FB8, 0xFFFFE3EE, 0xFFB8467A]),
+  PColor('سبز', 80, [0xFF5ECB6B, 0xFFE3F8E0, 0xFF2F8F43]),
+  PColor('قرمز', 80, [0xFFE0524D, 0xFFFFE0DD, 0xFF9A2B28]),
+  PColor('نارنجی', 80, [0xFFF28C38, 0xFFFFE8CC, 0xFFB4561A]),
+  PColor('فیروزه‌ای', 100, [0xFF3FC6C0, 0xFFD8F8F6, 0xFF1F8A86]),
+  PColor('سیاه', 120, [0xFF3A3A44, 0xFF7C7C8C, 0xFF1E1E26]),
+  PColor('سفید', 120, [0xFFF2F2F7, 0xFFFFFFFF, 0xFFB8B8C8]),
+  PColor('طلایی', 400, [0xFFF6C945, 0xFFFFF3C4, 0xFFC98B1F]),
+];
+
+int petValue(Map h) {
+  final lv = (h['lv'] as int?) ?? 1, rar = (h['rar'] as int?) ?? 0;
+  if (h['hatched'] == false) return 60 * (rar + 1);
+  final base = 25 + (lv - 1) * 18 + lv * lv * 2;
+  return (base * (rar == 2 ? 3 : (rar == 1 ? 1.8 : 1))).round();
+}
+
+List<int> _palFor(String sp, int rar, [int col = 0]) {
+  if (col > 0 && col < petColors.length) return petColors[col].pal;
   final b = _pal[sp] ?? _pal['cat']!;
   if (rar == 2) return const [0xFFF6C945, 0xFFFFF3C4, 0xFFC98B1F];
   if (rar == 1) return [for (final c in b) _hueRot(c, 150)];
@@ -639,11 +802,27 @@ class PetSprite {
 }
 
 final _spriteCache = <String, PetSprite>{};
-PetSprite petSprite(String sp, int stage, String face, [int rar = 0]) => _spriteCache.putIfAbsent('$sp|$stage|$face|$rar', () => _buildPet(sp, stage, face, rar));
+PetSprite petSprite(String sp, int stage, String face, [int rar = 0, int col = 0]) {
+  final key = '$sp|$stage|$face|$rar|$col';
+  var sprite = _spriteCache[key];
+  if (sprite == null) {
+    sprite = _buildPet(sp, stage, face, rar, col);
+    _spriteCache[key] = sprite;
+    pxImage(sprite.px);
+    if (face == 'idle') {
+      Future.microtask(() {
+        for (final f in ['happy', 'eat', 'eat2', 'blink', 'sleep', 'sad']) {
+          petSprite(sp, stage, f, rar, col);
+        }
+      });
+    }
+  }
+  return sprite;
+}
 
-PetSprite _buildPet(String sp, int stage, String face, int rar) {
+PetSprite _buildPet(String sp, int stage, String face, int rar, int col) {
   final px = Px(48, 48);
-  final pc = _palFor(sp, rar);
+  final pc = _palFor(sp, rar, col);
   final base = _tones(pc[0]), belly = _tones(pc[1]), acc = _tones(pc[2]);
   final sc = const [.58, .74, .9, 1.0, 1.06][stage];
   final hk = const [1.5, 1.3, 1.12, 1.0, 1.0][stage];
@@ -875,15 +1054,15 @@ Px eggSprite(String sp, int cracks, [int rar = 0]) => _eggCache.putIfAbsent('$sp
       final pc = _palFor(sp, rar);
       final shell = _tones(0xFFF7F0DE), spot = _tones(pc[0]);
       const cy = 27.0, ry = 19.0;
-      for (var y = 0; y < 48; y++) {
-        final t = (y + .5 - cy) / ry;
+      for (var y = 0; y < px.h; y++) {
+        final t = (y + .5 - cy * px.k) / (ry * px.k);
         if (t.abs() > 1) continue;
-        final rx = 14.0 * math.sqrt(1 - t * t) * (1 + .18 * t);
-        for (var x = (24 - rx).floor(); x <= (24 + rx).ceil(); x++) {
-          final dx = (x + .5 - 24) / (rx < .5 ? .5 : rx);
+        final rx = 14.0 * px.k * math.sqrt(1 - t * t) * (1 + .18 * t);
+        for (var x = (24 * px.k - rx).floor(); x <= (24 * px.k + rx).ceil(); x++) {
+          final dx = (x + .5 - 24 * px.k) / (rx < .5 ? .5 : rx);
           if (dx.abs() > 1) continue;
           final l = -dx * .55 - t * .8;
-          px.set(x, y, l > .38 ? shell[0] : (l > -.3 ? shell[1] : shell[2]));
+          px.setR(x, y, l > .38 ? shell[0] : (l > -.3 ? shell[1] : shell[2]));
         }
       }
       px.ell(18, 31, 4.2, 3.4, spot, onlyOn: true);
@@ -918,11 +1097,11 @@ Widget petCanvas(Map h, {double size = 200, String face = 'idle', double bob = 0
   final cell = size / 48;
   final rar = (h['rar'] as int?) ?? 0;
   if (h['hatched'] == false) {
-    return SizedBox(width: size, height: size, child: CustomPaint(painter: PxPainter(eggSprite('${h['a']}', 0, rar))));
+    return SizedBox(width: size, height: size, child: PxView(eggSprite('${h['a']}', 0, rar)));
   }
   final sp = '${h['a']}';
   final stage = stageOf((h['lv'] as int?) ?? 1);
-  final spr = petSprite(sp, stage, face, rar);
+  final spr = petSprite(sp, stage, face, rar, (h['col'] as int?) ?? 0);
   final eq = Map<String, dynamic>.from((h['eq'] as Map?) ?? {});
   Widget item(String slot, double cx, double cy, double w) {
     final it = eq[slot] == null ? null : itemById('${eq[slot]}');
@@ -939,7 +1118,7 @@ Widget petCanvas(Map h, {double size = 200, String face = 'idle', double bob = 0
           offset: Offset(0, bob),
           child: Stack(clipBehavior: Clip.none, children: [
             item('back', spr.bx - spr.brx * .95, spr.by - spr.bry * .2, spr.brx * 1.7),
-            Positioned.fill(child: CustomPaint(painter: PxPainter(spr.px))),
+            Positioned.fill(child: PxView(spr.px)),
             item('neck', spr.hx, spr.hy + spr.hry * .95, spr.brx * 1.05),
             item('face', spr.hx, spr.ey + .6, faceW),
             item('hat', spr.hx, spr.hy - spr.hry * .95 - hatW * .12, hatW),
@@ -1087,11 +1266,16 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
   VoidCallback? _afterEat;
   bool busy = false, _eaten = false;
   int _bite = 0;
+  Timer? _love;
 
   @override
   void initState() {
     super.initState();
     _idle = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200))..repeat();
+    _love = Timer.periodic(const Duration(seconds: 55), (_) {
+      if (!mounted || busy || isNight() || widget.hero['hatched'] == false) return;
+      if (math.Random().nextInt(3) == 0) react(); // پت ابراز علاقه می‌کنه
+    });
     _act = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600));
     _wob = AnimationController(vsync: this, duration: const Duration(milliseconds: 480));
     _hatch = AnimationController(vsync: this, duration: const Duration(milliseconds: 2600));
@@ -1110,6 +1294,7 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
         final cb = _afterEat;
         _afterEat = null;
         cb?.call();
+        sfx('pet_${widget.hero['a']}');
       }
     });
     _act.addStatusListener((st) {
@@ -1145,6 +1330,7 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _love?.cancel();
     _idle.dispose();
     _act.dispose();
     _wob.dispose();
@@ -1167,6 +1353,7 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
   void react() {
     if (busy) return;
     busy = true;
+    sfx('pet_${widget.hero['a']}');
     _food = null;
     _act.duration = const Duration(milliseconds: 1400);
     _act.forward(from: 0);
@@ -1199,7 +1386,7 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
       child: ClipRRect(
           borderRadius: BorderRadius.circular(16),
           child: Stack(children: [
-            Positioned.fill(child: CustomPaint(painter: ScenePainter(Gm.bg, isNight(), seasonNow(), _idle))),
+            Positioned.fill(child: RepaintBoundary(child: CustomPaint(painter: ScenePainter(Gm.bg, isNight(), seasonNow(), _idle)))),
             Align(alignment: const Alignment(0, .78), child: SizedBox(width: S, height: S, child: child)),
             if (hint != null) Positioned(bottom: 8, left: 0, right: 0, child: Center(child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(12)), child: Text(hint, style: const TextStyle(color: Colors.white, fontSize: 12))))),
           ])));
@@ -1208,7 +1395,7 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final h = widget.hero;
     if (h['hatched'] == false) return _eggView(h);
-    return _wrap(AnimatedBuilder(
+    return _wrap(RepaintBoundary(child: AnimatedBuilder(
         animation: Listenable.merge([_idle, _act]),
         builder: (c, _) {
           final cell = S / 48;
@@ -1216,7 +1403,7 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
           final rar = (h['rar'] as int?) ?? 0;
           final hungry = Gm.sat(h) < 25;
           final aura = rar == 2 ? const Color(0xFFFFD35A) : (stage == 4 ? const Color(0xFF7CE8FF) : null);
-          final spr = petSprite('${h['a']}', stage, 'idle', rar);
+          final spr = petSprite('${h['a']}', stage, 'idle', rar, (h['col'] as int?) ?? 0);
           var face = 'idle';
           double jump = 0;
           final t = _act.value;
@@ -1278,7 +1465,17 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
                 if (hungry && !acting && face != 'sleep') Positioned(left: spr.hx * cell + 16, top: spr.hy * cell - 44 + math.sin(iv * math.pi * 4) * 3, child: const PxEmoji('🍖', 24)),
                 if (face == 'sleep') Positioned(left: spr.hx * cell + 18, top: spr.hy * cell - 40, child: const Text('💤', style: TextStyle(fontSize: 26))),
               ]));
-        }));
+        })), hint: _habitHint());
+  }
+
+  String? _habitHint() {
+    final h = widget.hero;
+    final oc = occasion();
+    if (oc != null && h['hatched'] != false) return oc.text;
+    if (h['hatched'] == false || isNight() || DateTime.now().hour < 16) return null;
+    final today = ds(DateTime.now());
+    final p = D.habits.where((x) => !hDoneG(x, today)).length;
+    return p > 0 ? '🔥 ${h['n']} می‌گه: هنوز $p عادت امروز مونده!' : null;
   }
 
   Widget _eggView(Map h) {
@@ -1298,10 +1495,10 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
                     if (hv < .3) {
                       final rot = math.sin(hv * 90) * .22;
                       lim.add(Center(child: Container(width: S * (.3 + hv * 1.6), height: S * (.3 + hv * 1.6), decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [const Color(0xFFFFF2A0).withOpacity(.85 * hv / .3), Colors.transparent])))));
-                      lim.add(Transform.rotate(alignment: Alignment.bottomCenter, angle: rot, child: SizedBox(width: S, height: S, child: CustomPaint(painter: PxPainter(eggSprite(sp, 3, rar))))));
+                      lim.add(Transform.rotate(alignment: Alignment.bottomCenter, angle: rot, child: SizedBox(width: S, height: S, child: PxView(eggSprite(sp, 3, rar)))));
                     } else {
                       final e = Curves.easeOut.transform(((hv - .3) / .7).clamp(0.0, 1.0).toDouble());
-                      final shell = SizedBox(width: S, height: S, child: CustomPaint(painter: PxPainter(eggSprite(sp, 3, rar))));
+                      final shell = SizedBox(width: S, height: S, child: PxView(eggSprite(sp, 3, rar)));
                       lim.add(Center(child: Container(width: S * (.9 + e * 1.4), height: S * (.9 + e * 1.4), decoration: BoxDecoration(shape: BoxShape.circle, gradient: RadialGradient(colors: [Colors.white.withOpacity((1 - e).clamp(0.0, 1.0) * .9), Colors.transparent])))));
                       final pe = Curves.elasticOut.transform(((hv - .34) / .66).clamp(0.0, 1.0).toDouble());
                       final babyH = Map<String, dynamic>.from(h)..['hatched'] = true;
@@ -1320,7 +1517,7 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
                     return Stack(clipBehavior: Clip.none, children: lim);
                   }
                   final w = math.sin(_wob.value * math.pi * 6) * .2 * (1 - _wob.value);
-                  final eggW = Transform.rotate(alignment: Alignment.bottomCenter, angle: w, child: SizedBox(width: S, height: S, child: CustomPaint(painter: PxPainter(eggSprite(sp, tp.clamp(0, 3).toInt(), rar)))));
+                  final eggW = Transform.rotate(alignment: Alignment.bottomCenter, angle: w, child: SizedBox(width: S, height: S, child: PxView(eggSprite(sp, tp.clamp(0, 3).toInt(), rar))));
                   if (rar == 0) return eggW;
                   final gc = rar == 2 ? const Color(0xFFFFD35A) : const Color(0xFF7CC8FF);
                   return Stack(clipBehavior: Clip.none, children: [
@@ -1514,6 +1711,7 @@ class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMix
     final rest = maxPlays - plays;
     result += rest > 0 ? '\n$rest بار دیگه امروز می‌تونی بازی کنی.' : '\nسهم امروزت تموم شد؛ فردا دوباره بیا 🌙';
     sfx(score > 10 ? 'hatch' : 'done');
+    Mn.inc('game');
   }
 
   @override
@@ -1578,6 +1776,1042 @@ class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMix
                   ])));
         }));
   }
+}
+
+// ───────────────────────── میز کار آنلاین (Supabase) ─────────────────────────
+class Sb {
+  static String url = '', key = '', token = '', refresh = '', uid = '', name = '', email = '';
+
+  static void load() {
+    url = prefs.getString('sbUrl') ?? '';
+    key = prefs.getString('sbKey') ?? '';
+    token = prefs.getString('sbTok') ?? '';
+    refresh = prefs.getString('sbRef') ?? '';
+    uid = prefs.getString('sbUid') ?? '';
+    name = prefs.getString('sbName') ?? '';
+    email = prefs.getString('sbEmail') ?? '';
+  }
+
+  static bool get ok => url.isNotEmpty && key.isNotEmpty;
+  static bool get loggedIn => token.isNotEmpty && uid.isNotEmpty;
+
+  static Future<void> saveCfg(String u, String k) async {
+    url = u.trim();
+    key = k.trim();
+    await prefs.setString('sbUrl', url);
+    await prefs.setString('sbKey', key);
+  }
+
+  static Future<void> _session(Map j, {String? nm, String? mail}) async {
+    token = '${j['access_token'] ?? ''}';
+    refresh = '${j['refresh_token'] ?? refresh}';
+    final u = (j['user'] as Map?) ?? {};
+    uid = '${u['id'] ?? uid}';
+    final meta = (u['user_metadata'] as Map?) ?? {};
+    name = nm ?? '${meta['name'] ?? name}';
+    email = mail ?? '${u['email'] ?? email}';
+    await prefs.setString('sbTok', token);
+    await prefs.setString('sbRef', refresh);
+    await prefs.setString('sbUid', uid);
+    await prefs.setString('sbName', name);
+    await prefs.setString('sbEmail', email);
+  }
+
+  static Future<void> logout() async {
+    token = refresh = uid = '';
+    await prefs.remove('sbTok');
+    await prefs.remove('sbRef');
+    await prefs.remove('sbUid');
+  }
+
+  static Future<bool> _refresh() async {
+    try {
+      final j = await req('POST', '/auth/v1/token', q: {'grant_type': 'refresh_token'}, body: {'refresh_token': refresh}, auth: false, retry: false);
+      if (j is Map && j['access_token'] != null) {
+        await _session(j);
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  static Future<void> signIn(String mail, String pw) async {
+    final j = await req('POST', '/auth/v1/token', q: {'grant_type': 'password'}, body: {'email': mail, 'password': pw}, auth: false, retry: false);
+    await _session(j as Map, mail: mail);
+  }
+
+  static Future<void> signUp(String mail, String pw, String nm) async {
+    final j = await req('POST', '/auth/v1/signup', body: {'email': mail, 'password': pw, 'data': {'name': nm}}, auth: false, retry: false);
+    if (j is Map && j['access_token'] != null) {
+      await _session(j, nm: nm, mail: mail);
+    } else {
+      await signIn(mail, pw);
+      name = nm;
+      await prefs.setString('sbName', nm);
+    }
+  }
+
+  static Future<dynamic> req(String method, String path, {Object? body, Map<String, String>? q, bool auth = true, bool retry = true, Map<String, String>? headers}) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    try {
+      final base = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+      final uri = Uri.parse('$base$path').replace(queryParameters: q);
+      final r = await client.openUrl(method, uri);
+      r.headers.set('apikey', key);
+      r.headers.set('Authorization', 'Bearer ${auth && token.isNotEmpty ? token : key}');
+      r.headers.set('Content-Type', 'application/json');
+      headers?.forEach(r.headers.set);
+      if (body != null) r.add(utf8.encode(jsonEncode(body)));
+      final res = await r.close().timeout(const Duration(seconds: 15));
+      final text = await res.transform(utf8.decoder).join();
+      if (res.statusCode == 401 && auth && retry && refresh.isNotEmpty) {
+        if (await _refresh()) return req(method, path, body: body, q: q, auth: auth, retry: false, headers: headers);
+      }
+      if (res.statusCode >= 400) {
+        var msg = text;
+        try {
+          final j = jsonDecode(text);
+          msg = '${j['message'] ?? j['msg'] ?? j['error_description'] ?? j['error'] ?? text}';
+        } catch (_) {}
+        throw Exception(msg);
+      }
+      return text.isEmpty ? null : jsonDecode(text);
+    } finally {
+      client.close();
+    }
+  }
+
+  static Future<void> backupNow() async {
+    await req('POST', '/rest/v1/backups', body: {'user_id': uid, 'data': D.backup(), 'updated_at': DateTime.now().toUtc().toIso8601String()}, headers: {'Prefer': 'resolution=merge-duplicates'});
+    await prefs.setInt('bkAt', DateTime.now().millisecondsSinceEpoch);
+  }
+
+  static Future<Map<String, dynamic>?> remoteBackup() async {
+    final l = rows(await req('GET', '/rest/v1/backups', q: {'select': 'data,updated_at'}));
+    return l.isEmpty ? null : Map<String, dynamic>.from(l.first);
+  }
+
+  static List<Map> rows(dynamic x) => [for (final e in (x as List? ?? [])) Map<String, dynamic>.from(e as Map)];
+}
+
+const roleLabel = {'manager': 'مدیر', 'supervisor': 'سرپرست', 'member': 'عضو'};
+const stLabel = {'todo': 'انجام نشده', 'doing': 'در حال انجام', 'done': 'انجام شد'};
+const stColor = {'todo': Colors.grey, 'doing': Colors.orange, 'done': Colors.green};
+
+class WorkPage extends StatefulWidget {
+  const WorkPage({super.key});
+  @override
+  State<WorkPage> createState() => _WorkPageState();
+}
+
+class _WorkPageState extends State<WorkPage> {
+  final url = TextEditingController(text: Sb.url), key = TextEditingController(text: Sb.key);
+  final email = TextEditingController(text: Sb.email), pass = TextEditingController(), name = TextEditingController(text: Sb.name);
+  bool busy = false, reg = false, editCfg = false;
+  String err = '';
+  List<Map> list = [];
+
+  @override
+  void initState() {
+    super.initState();
+    if (Sb.ok && Sb.loggedIn) _load();
+  }
+
+  Future<void> run(Future<void> Function() f) async {
+    setState(() {
+      busy = true;
+      err = '';
+    });
+    try {
+      await f();
+    } catch (e) {
+      err = '$e'.replaceFirst('Exception: ', '');
+    }
+    if (mounted) setState(() => busy = false);
+  }
+
+  Future<void> _load() => run(() async {
+        final r = await Sb.req('GET', '/rest/v1/members', q: {'select': 'role,name,workspaces(id,name,code)', 'user_id': 'eq.${Sb.uid}'});
+        list = Sb.rows(r);
+      });
+
+  void _open(Map m) {
+    final ws = Map<String, dynamic>.from(m['workspaces'] as Map);
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => WsPage(ws: ws, role: '${m['role']}')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget body;
+    if (!Sb.ok || editCfg) {
+      body = ListView(padding: const EdgeInsets.all(16), children: [
+        const Text('اتصال به سرور', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        const SizedBox(height: 8),
+        const Text('میز کار آنلاین به یک دیتابیس رایگان Supabase وصل می‌شه: توی supabase.com یه پروژه بساز، فایل supabase_setup.sql رو توی SQL Editor اجرا کن، بعد آدرس پروژه (Project URL) و کلید anon رو اینجا بذار. مدیر یک بار این کار رو می‌کنه و همه‌ی اعضا همین دو مقدار رو وارد می‌کنن.', style: TextStyle(height: 1.7)),
+        const SizedBox(height: 12),
+        TextField(controller: url, textDirection: TextDirection.ltr, decoration: const InputDecoration(labelText: 'Project URL (https://xxxx.supabase.co)')),
+        TextField(controller: key, textDirection: TextDirection.ltr, decoration: const InputDecoration(labelText: 'anon public key')),
+        const SizedBox(height: 12),
+        FilledButton(
+            onPressed: () async {
+              if (url.text.trim().isEmpty || key.text.trim().isEmpty) return;
+              await Sb.saveCfg(url.text, key.text);
+              setState(() => editCfg = false);
+            },
+            child: const Text('ذخیره‌ی اتصال')),
+      ]);
+    } else if (!Sb.loggedIn) {
+      body = ListView(padding: const EdgeInsets.all(16), children: [
+        Text(reg ? 'ثبت‌نام' : 'ورود', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        if (reg) TextField(controller: name, decoration: const InputDecoration(labelText: 'نام و نام‌خانوادگی')),
+        TextField(controller: email, textDirection: TextDirection.ltr, keyboardType: TextInputType.emailAddress, decoration: const InputDecoration(labelText: 'ایمیل')),
+        TextField(controller: pass, obscureText: true, textDirection: TextDirection.ltr, decoration: const InputDecoration(labelText: 'رمز عبور (حداقل ۶ حرف)')),
+        const SizedBox(height: 12),
+        FilledButton(
+            onPressed: busy
+                ? null
+                : () => run(() async {
+                      if (reg) {
+                        if (name.text.trim().isEmpty) throw Exception('نام رو وارد کن');
+                        await Sb.signUp(email.text.trim(), pass.text, name.text.trim());
+                      } else {
+                        await Sb.signIn(email.text.trim(), pass.text);
+                      }
+                      await _load();
+                    }),
+            child: Text(reg ? 'ساخت حساب' : 'ورود')),
+        TextButton(onPressed: () => setState(() => reg = !reg), child: Text(reg ? 'حساب دارم؛ ورود' : 'حساب ندارم؛ ثبت‌نام')),
+      ]);
+    } else {
+      body = RefreshIndicator(
+          onRefresh: _load,
+          child: ListView(padding: const EdgeInsets.all(12), children: [
+            Card(child: ListTile(leading: const Icon(Icons.person), title: Text(Sb.name.isEmpty ? Sb.email : Sb.name), subtitle: Text(Sb.email))),
+            Card(
+                child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      const Text('☁️ پشتیبان‌گیری آنلاین از اطلاعات برنامه', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const Text('کارها، مالی، عادت‌ها، پت و ... با همین حساب روی سرور ذخیره می‌شه تا با عوض شدن گوشی چیزی از دست نره.', style: TextStyle(fontSize: 12)),
+                      SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('پشتیبان‌گیری خودکار'),
+                          subtitle: Text(prefs.getInt('bkAt') == null ? 'هنوز پشتیبانی گرفته نشده' : 'آخرین پشتیبان: ${DateTime.fromMillisecondsSinceEpoch(prefs.getInt('bkAt')!).toString().substring(0, 16)}'),
+                          value: prefs.getBool('autoBk') ?? false,
+                          onChanged: (v) {
+                            prefs.setBool('autoBk', v);
+                            setState(() {});
+                          }),
+                      Row(children: [
+                        Expanded(child: FilledButton.tonal(onPressed: busy ? null : () => run(() async { await Sb.backupNow(); }), child: const Text('ذخیره‌ی الان'))),
+                        const SizedBox(width: 8),
+                        Expanded(
+                            child: OutlinedButton(
+                                onPressed: busy
+                                    ? null
+                                    : () => run(() async {
+                                          final b = await Sb.remoteBackup();
+                                          if (b == null) throw Exception('پشتیبانی روی سرور پیدا نشد');
+                                          if (!mounted) return;
+                                          final ok = await showDialog<bool>(
+                                              context: context,
+                                              builder: (ctx) => AlertDialog(
+                                                    title: const Text('بازیابی از سرور؟'),
+                                                    content: Text('اطلاعات فعلی برنامه با پشتیبان ${'${b['updated_at']}'.substring(0, 16)} جایگزین می‌شه.'),
+                                                    actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')), FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بازیابی'))],
+                                                  ));
+                                          if (ok != true) return;
+                                          final done = await D.restore('${b['data']}');
+                                          Gm.load();
+                                          Mn.load();
+                                          if (!done) throw Exception('بازیابی ناموفق بود');
+                                        }),
+                                child: const Text('بازیابی از سرور'))),
+                      ]),
+                    ]))),
+            const Padding(padding: EdgeInsets.fromLTRB(4, 8, 4, 4), child: Text('میزکارهای من', style: TextStyle(fontWeight: FontWeight.bold))),
+            if (list.isEmpty && !busy) const Padding(padding: EdgeInsets.all(20), child: Text('هنوز عضو هیچ میزکاری نیستی. یکی بساز (مدیر می‌شی) یا با کد دعوت بپیوند.', textAlign: TextAlign.center)),
+            for (final m in list)
+              Card(
+                  child: ListTile(
+                      leading: Icon(m['role'] == 'member' ? Icons.work_outline : Icons.admin_panel_settings),
+                      title: Text('${(m['workspaces'] as Map)['name']}'),
+                      subtitle: Text(roleLabel['${m['role']}'] ?? 'عضو'),
+                      trailing: const Icon(Icons.chevron_left),
+                      onTap: () => _open(m))),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                  child: FilledButton.icon(
+                      icon: const Icon(Icons.add),
+                      label: const Text('ساخت میزکار'),
+                      onPressed: () async {
+                        final nm = await askText(context, 'نام میزکار (شرکت / تیم)');
+                        if (nm == null || nm.isEmpty) return;
+                        await run(() async {
+                          await Sb.req('POST', '/rest/v1/rpc/create_workspace', body: {'p_name': nm, 'p_user': Sb.name.isEmpty ? Sb.email : Sb.name});
+                          await _load();
+                        });
+                      })),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: OutlinedButton.icon(
+                      icon: const Icon(Icons.vpn_key),
+                      label: const Text('پیوستن با کد'),
+                      onPressed: () async {
+                        final c = await askText(context, 'کد دعوت میزکار');
+                        if (c == null || c.isEmpty) return;
+                        await run(() async {
+                          await Sb.req('POST', '/rest/v1/rpc/join_workspace', body: {'p_code': c, 'p_user': Sb.name.isEmpty ? Sb.email : Sb.name});
+                          await _load();
+                        });
+                      })),
+            ]),
+          ]));
+    }
+    return Scaffold(
+        appBar: AppBar(title: const Text('میز کار'), actions: [
+          if (Sb.ok) IconButton(icon: const Icon(Icons.settings_ethernet), tooltip: 'تنظیم اتصال', onPressed: () => setState(() => editCfg = !editCfg)),
+          if (Sb.loggedIn)
+            IconButton(
+                icon: const Icon(Icons.logout),
+                tooltip: 'خروج',
+                onPressed: () async {
+                  await Sb.logout();
+                  if (mounted) setState(() => list = []);
+                }),
+        ]),
+        body: Column(children: [
+          if (busy) const LinearProgressIndicator(),
+          if (err.isNotEmpty) Container(width: double.infinity, color: Colors.red.withOpacity(.12), padding: const EdgeInsets.all(10), child: Text(err, style: const TextStyle(color: Colors.red))),
+          Expanded(child: body),
+        ]));
+  }
+}
+
+class WsPage extends StatefulWidget {
+  final Map ws;
+  final String role;
+  const WsPage({super.key, required this.ws, required this.role});
+  @override
+  State<WsPage> createState() => _WsPageState();
+}
+
+class _WsPageState extends State<WsPage> {
+  List<Map> projects = [], tasks = [], members = [];
+  Timer? _t;
+  bool loading = true;
+  String err = '';
+  String get wid => '${widget.ws['id']}';
+  bool get mgr => widget.role == 'manager' || widget.role == 'supervisor';
+  bool get boss => widget.role == 'manager';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _t = Timer.periodic(const Duration(seconds: 10), (_) => _load(silent: true)); // بروزرسانی زنده
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    try {
+      final r = await Future.wait([
+        Sb.req('GET', '/rest/v1/projects', q: {'workspace_id': 'eq.$wid', 'order': 'created_at.asc'}),
+        Sb.req('GET', '/rest/v1/tasks', q: {'workspace_id': 'eq.$wid', 'order': 'created_at.desc'}),
+        Sb.req('GET', '/rest/v1/members', q: {'workspace_id': 'eq.$wid', 'order': 'name.asc'}),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        projects = Sb.rows(r[0]);
+        tasks = Sb.rows(r[1]);
+        members = Sb.rows(r[2]);
+        loading = false;
+        err = '';
+      });
+      _weekReward();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          loading = false;
+          if (!silent) err = '$e'.replaceFirst('Exception: ', '');
+        });
+      }
+    }
+  }
+
+  void snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  DateTime get _weekStart {
+    final n = DateTime.now();
+    return DateTime(n.year, n.month, n.day - ((n.weekday + 1) % 7));
+  }
+
+  int _doneIn(dynamic uid, DateTime a, DateTime b) => tasks.where((t) {
+        if (t['assignee'] != uid || t['status'] != 'done') return false;
+        final u = DateTime.tryParse('${t['updated_at']}')?.toLocal();
+        return u != null && !u.isBefore(a) && u.isBefore(b);
+      }).length;
+
+  List<Widget> _memberTiles() {
+    final ws0 = _weekStart, end = ws0.add(const Duration(days: 7));
+    final today = ds(DateTime.now());
+    final list = [...members]..sort((a, b) => _doneIn(b['user_id'], ws0, end).compareTo(_doneIn(a['user_id'], ws0, end)));
+    return [
+      for (var i = 0; i < list.length; i++)
+        Builder(builder: (_) {
+          final m = list[i], id = m['user_id'];
+          final dw = _doneIn(id, ws0, end);
+          final op = tasks.where((t) => t['assignee'] == id && t['status'] != 'done').length;
+          final od = tasks.where((t) => t['assignee'] == id && t['status'] != 'done' && t['due'] != null && '${t['due']}'.compareTo(today) < 0).length;
+          return ListTile(
+              leading: Text(i < 3 && dw > 0 ? const ['🥇', '🥈', '🥉'][i] : '👤', style: const TextStyle(fontSize: 24)),
+              title: Text('${m['name']} • ${roleLabel['${m['role']}'] ?? ''}'),
+              subtitle: Text('این هفته: $dw انجام‌شده • باز: $op • دیرکرد: $od', style: TextStyle(color: od > 0 ? Colors.red : null)),
+              trailing: boss && id != Sb.uid
+                  ? PopupMenuButton<String>(
+                      onSelected: (v) => _act(() async {
+                            if (v == 'remove') {
+                              await Sb.req('DELETE', '/rest/v1/members', q: {'workspace_id': 'eq.$wid', 'user_id': 'eq.$id'});
+                            } else {
+                              await Sb.req('PATCH', '/rest/v1/members', q: {'workspace_id': 'eq.$wid', 'user_id': 'eq.$id'}, body: {'role': v});
+                            }
+                          }),
+                      itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'manager', child: Text('تبدیل به مدیر')),
+                            PopupMenuItem(value: 'supervisor', child: Text('تبدیل به سرپرست')),
+                            PopupMenuItem(value: 'member', child: Text('تبدیل به عضو')),
+                            PopupMenuItem(value: 'remove', child: Text('حذف از میزکار')),
+                          ])
+                  : null);
+        }),
+    ];
+  }
+
+  void _weekReward() {
+    final ws0 = _weekStart, prev = ws0.subtract(const Duration(days: 7));
+    var best = 0;
+    dynamic top;
+    for (final m in members) {
+      final c = _doneIn(m['user_id'], prev, ws0);
+      if (c > best) {
+        best = c;
+        top = m['user_id'];
+      }
+    }
+    if (top == Sb.uid && best > 0 && Gm.rw.add('wk:$wid:${ds(ws0)}')) {
+      Gm.coins += 100;
+      Gm.save();
+      Gm.say('🏆 هفته‌ی پیش برترین عضو میزکار بودی با $best کار!\nجایزه: ۱۰۰ سکه', true);
+    }
+  }
+
+  String nameOf(dynamic id) => members.where((x) => x['user_id'] == id).map((x) => '${x['name']}').firstOrNull ?? '—';
+
+  Future<void> _act(Future<void> Function() f) async {
+    try {
+      await f();
+      await _load(silent: true);
+    } catch (e) {
+      snack('$e'.replaceFirst('Exception: ', ''));
+    }
+  }
+
+  Future<void> _addProject() async {
+    final t = await askText(context, 'عنوان پروژه');
+    if (t == null || t.isEmpty) return;
+    await _act(() => Sb.req('POST', '/rest/v1/projects', body: {'workspace_id': wid, 'title': t}));
+  }
+
+  Future<void> _addTask(Map p) async {
+    final title = TextEditingController(), desc = TextEditingController();
+    String? who;
+    DateTime? due;
+    await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, set) => Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+                child: SingleChildScrollView(
+                    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  Text('کار جدید در «${p['title']}»', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  TextField(controller: title, autofocus: true, decoration: const InputDecoration(labelText: 'عنوان کار')),
+                  TextField(controller: desc, maxLines: 3, minLines: 1, decoration: const InputDecoration(labelText: 'توضیحات')),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                      value: who,
+                      decoration: const InputDecoration(labelText: 'مسئول انجام'),
+                      items: [for (final m in members) DropdownMenuItem(value: '${m['user_id']}', child: Text('${m['name']}'))],
+                      onChanged: (v) => set(() => who = v)),
+                  ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.event),
+                      title: Text(due == null ? 'مهلت (اختیاری)' : 'مهلت: ${fd(ds(due!))}'),
+                      onTap: () async {
+                        final d = await pickDate(ctx, initial: due ?? DateTime.now(), help: 'مهلت انجام');
+                        if (d != null) set(() => due = d);
+                      }),
+                  FilledButton(
+                      onPressed: () {
+                        if (title.text.trim().isEmpty) return;
+                        Navigator.pop(ctx);
+                        _act(() => Sb.req('POST', '/rest/v1/tasks', body: {'project_id': p['id'], 'workspace_id': wid, 'title': title.text.trim(), 'descr': desc.text.trim(), 'assignee': who, 'due': due == null ? null : ds(due!)}));
+                      },
+                      child: const Text('ثبت کار')),
+                ])))));
+  }
+
+  Future<void> _setStatus(Map t, String st) async {
+    await _act(() async {
+      await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${t['id']}'}, body: {'status': st, 'updated_at': DateTime.now().toUtc().toIso8601String()});
+      await Sb.req('POST', '/rest/v1/reports', body: {'task_id': t['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'status', 'text': 'وضعیت: ${stLabel[st]}'});
+    });
+  }
+
+  void _taskSheet(Map t) {
+    var reload = 0;
+    final mine = t['assignee'] == Sb.uid;
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
+              final cur = tasks.where((x) => x['id'] == t['id']).firstOrNull ?? t;
+              final st = '${cur['status']}';
+              return SafeArea(
+                  child: Padding(
+                      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+                      child: SingleChildScrollView(
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+                        Text('${cur['title']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                        if ('${cur['descr'] ?? ''}'.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 4), child: Text('${cur['descr']}')),
+                        const SizedBox(height: 8),
+                        Wrap(spacing: 6, children: [
+                          Chip(label: Text(stLabel[st] ?? st), backgroundColor: (stColor[st] ?? Colors.grey).withOpacity(.2)),
+                          Chip(avatar: const Icon(Icons.person, size: 16), label: Text(nameOf(cur['assignee']))),
+                          if (cur['due'] != null) Chip(avatar: const Icon(Icons.event, size: 16), label: Text(fd('${cur['due']}'))),
+                        ]),
+                        if (mine || mgr)
+                          Wrap(spacing: 8, children: [
+                            if (st != 'doing') OutlinedButton(onPressed: () async { await _setStatus(cur, 'doing'); set(() => reload++); }, child: const Text('در حال انجام')),
+                            if (st != 'done') FilledButton(onPressed: () async { await _setStatus(cur, 'done'); set(() => reload++); }, child: const Text('✓ انجام شد')),
+                            if (st == 'done') OutlinedButton(onPressed: () async { await _setStatus(cur, 'todo'); set(() => reload++); }, child: const Text('برگشت به انجام‌نشده')),
+                            OutlinedButton(
+                                onPressed: () async {
+                                  final txt = await askText(ctx, 'گزارش کار', lines: 4);
+                                  if (txt == null || txt.isEmpty) return;
+                                  await _act(() => Sb.req('POST', '/rest/v1/reports', body: {'task_id': cur['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'report', 'text': txt}));
+                                  set(() => reload++);
+                                },
+                                child: const Text('ثبت گزارش')),
+                            OutlinedButton(
+                                onPressed: () async {
+                                  final others = members.where((m) => m['user_id'] != cur['assignee']).toList();
+                                  final pick = await showDialog<Map>(
+                                      context: ctx,
+                                      builder: (dc) => SimpleDialog(title: const Text('ارجاع به'), children: [for (final m in others) SimpleDialogOption(onPressed: () => Navigator.pop(dc, m), child: Text('${m['name']}'))]));
+                                  if (pick == null) return;
+                                  final note = await askText(ctx, 'توضیح ارجاع (اختیاری)');
+                                  await _act(() async {
+                                    await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}, body: {'assignee': pick['user_id'], 'status': 'todo', 'updated_at': DateTime.now().toUtc().toIso8601String()});
+                                    await Sb.req('POST', '/rest/v1/reports', body: {'task_id': cur['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'refer', 'text': 'ارجاع به ${pick['name']}${(note ?? '').isEmpty ? '' : ': $note'}'});
+                                  });
+                                  set(() => reload++);
+                                },
+                                child: const Text('ارجاع')),
+                            if (mgr)
+                              TextButton(
+                                  onPressed: () async {
+                                    Navigator.pop(ctx);
+                                    await _act(() => Sb.req('DELETE', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}));
+                                  },
+                                  child: const Text('حذف کار', style: TextStyle(color: Colors.red))),
+                          ]),
+                        const Divider(),
+                        const Text('گزارش‌ها و تاریخچه', style: TextStyle(fontWeight: FontWeight.bold)),
+                        FutureBuilder<dynamic>(
+                            key: ValueKey(reload),
+                            future: Sb.req('GET', '/rest/v1/reports', q: {'task_id': 'eq.${cur['id']}', 'order': 'created_at.asc'}),
+                            builder: (c, snap) {
+                              if (snap.hasError) return Text('${snap.error}');
+                              if (!snap.hasData) return const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator());
+                              final rs = Sb.rows(snap.data);
+                              if (rs.isEmpty) return const Padding(padding: EdgeInsets.all(8), child: Text('هنوز گزارشی ثبت نشده.'));
+                              return Column(children: [
+                                for (final r in rs)
+                                  ListTile(
+                                      dense: true,
+                                      contentPadding: EdgeInsets.zero,
+                                      leading: Icon(r['kind'] == 'refer' ? Icons.redo : (r['kind'] == 'status' ? Icons.flag_outlined : Icons.description_outlined), size: 20),
+                                      title: Text('${r['text']}'),
+                                      subtitle: Text('${r['name']} • ${'${r['created_at']}'.substring(0, 10)}')),
+                              ]);
+                            }),
+                      ]))));
+            }));
+  }
+
+  Widget _taskTile(Map t, {bool withProject = false}) {
+    final st = '${t['status']}';
+    final mine = t['assignee'] == Sb.uid;
+    return ListTile(
+        dense: true,
+        leading: (mine || mgr)
+            ? Checkbox(value: st == 'done', onChanged: (v) => _setStatus(t, v == true ? 'done' : 'todo'))
+            : Icon(st == 'done' ? Icons.check_circle : Icons.radio_button_unchecked, color: stColor[st]),
+        title: Text('${t['title']}', style: TextStyle(decoration: st == 'done' ? TextDecoration.lineThrough : null)),
+        subtitle: Text('${nameOf(t['assignee'])} • ${stLabel[st]}${t['due'] != null ? ' • ${fd('${t['due']}')}' : ''}${withProject ? ' • ${projects.where((p) => p['id'] == t['project_id']).map((p) => p['title']).firstOrNull ?? ''}' : ''}'),
+        onTap: () => _taskSheet(t));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mine = tasks.where((t) => t['assignee'] == Sb.uid).toList()..sort((a, b) => ('${a['status']}' == 'done' ? 1 : 0).compareTo('${b['status']}' == 'done' ? 1 : 0));
+    return DefaultTabController(
+        length: 3,
+        child: Scaffold(
+            appBar: AppBar(
+                title: Text('${widget.ws['name']}'),
+                bottom: const TabBar(tabs: [Tab(text: 'پروژه‌ها'), Tab(text: 'کارهای من'), Tab(text: 'اعضا')]),
+                actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: () => _load())]),
+            floatingActionButton: mgr ? FloatingActionButton(onPressed: _addProject, tooltip: 'پروژه‌ی جدید', child: const Icon(Icons.create_new_folder)) : null,
+            body: loading
+                ? const Center(child: CircularProgressIndicator())
+                : Column(children: [
+                    if (err.isNotEmpty) Container(width: double.infinity, color: Colors.red.withOpacity(.12), padding: const EdgeInsets.all(8), child: Text(err, style: const TextStyle(color: Colors.red))),
+                    Expanded(
+                        child: TabBarView(children: [
+                      RefreshIndicator(
+                          onRefresh: _load,
+                          child: ListView(padding: const EdgeInsets.all(8), children: [
+                            if (projects.isEmpty) Padding(padding: const EdgeInsets.all(24), child: Text(mgr ? 'پروژه‌ای نیست. با دکمه‌ی پایین یکی بساز.' : 'هنوز پروژه‌ای تعریف نشده.', textAlign: TextAlign.center)),
+                            for (final p in projects)
+                              Builder(builder: (_) {
+                                final pt = tasks.where((t) => t['project_id'] == p['id']).toList();
+                                final dn = pt.where((t) => t['status'] == 'done').length;
+                                return Card(
+                                    child: ExpansionTile(
+                                        title: Text('${p['title']}'),
+                                        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('$dn از ${pt.length} کار انجام شده'), const SizedBox(height: 4), LinearProgressIndicator(value: pt.isEmpty ? 0 : dn / pt.length)]),
+                                        children: [
+                                          for (final t in pt) _taskTile(t),
+                                          if (mgr)
+                                            Row(children: [
+                                              TextButton.icon(onPressed: () => _addTask(p), icon: const Icon(Icons.add), label: const Text('افزودن کار')),
+                                              const Spacer(),
+                                              TextButton(
+                                                  onPressed: () async {
+                                                    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('حذف پروژه؟'), content: const Text('همه‌ی کارهای این پروژه هم حذف می‌شه.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')), FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف'))]));
+                                                    if (ok == true) _act(() => Sb.req('DELETE', '/rest/v1/projects', q: {'id': 'eq.${p['id']}'}));
+                                                  },
+                                                  child: const Text('حذف پروژه', style: TextStyle(color: Colors.red))),
+                                            ]),
+                                        ]));
+                              }),
+                          ])),
+                      RefreshIndicator(
+                          onRefresh: _load,
+                          child: ListView(padding: const EdgeInsets.all(8), children: [
+                            if (mine.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('کاری به تو سپرده نشده.', textAlign: TextAlign.center)),
+                            for (final t in mine) Card(child: _taskTile(t, withProject: true)),
+                          ])),
+                      ListView(padding: const EdgeInsets.all(8), children: [
+                        Card(
+                            child: ListTile(
+                                leading: const Icon(Icons.vpn_key),
+                                title: Text('کد دعوت: ${widget.ws['code']}'),
+                                subtitle: const Text('این کد رو به اعضا بده تا با «پیوستن با کد» وارد بشن'),
+                                trailing: IconButton(
+                                    icon: const Icon(Icons.copy),
+                                    onPressed: () {
+                                      Clipboard.setData(ClipboardData(text: '${widget.ws['code']}'));
+                                      snack('کد کپی شد');
+                                    }))),
+                        const Padding(padding: EdgeInsets.fromLTRB(8, 12, 8, 4), child: Text('🏆 برترین‌های این هفته و کارکرد اعضا', style: TextStyle(fontWeight: FontWeight.bold))),
+                        ..._memberTiles(),
+                      ]),
+                    ])),
+                  ])));
+  }
+}
+
+// ویجت پت: تصویر پیکسلی پت (با آیتم‌ها) را می‌سازد و برای ویجت اندروید ذخیره می‌کند
+Future<void> syncPetWidget() async {
+  try {
+    if (Gm.heroes.isEmpty) return;
+    final h = Gm.heroes[Gm.active];
+    final hatched = h['hatched'] != false;
+    final rar = (h['rar'] as int?) ?? 0, col = (h['col'] as int?) ?? 0;
+    const sz = 192.0;
+    final cell = sz / 48;
+    final rec = ui.PictureRecorder();
+    final cv = Canvas(rec);
+    final paint = Paint()..filterQuality = FilterQuality.none;
+    Future<void> img(ui.Image im, double cx, double cy, double w) async {
+      final size = w * cell;
+      cv.drawImageRect(im, Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()), Rect.fromLTWH(cx * cell - size / 2, cy * cell - size / 2, size, size), paint);
+    }
+
+    if (!hatched) {
+      final im = await pxImage(eggSprite('${h['a']}', 0, rar));
+      cv.drawImageRect(im, Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()), const Rect.fromLTWH(0, 0, sz, sz), paint);
+    } else {
+      final stage = stageOf((h['lv'] as int?) ?? 1);
+      final sat = Gm.sat(h);
+      final spr = petSprite('${h['a']}', stage, sat < 25 ? 'sad' : 'idle', rar, col);
+      final pim = await pxImage(spr.px);
+      final eq = Map<String, dynamic>.from((h['eq'] as Map?) ?? {});
+      Future<void> item(String slot, double cx, double cy, double w) async {
+        final it = eq[slot] == null ? null : itemById('${eq[slot]}');
+        if (it == null) return;
+        await img(await pixelEmoji(it.emoji), cx, cy, w);
+      }
+
+      await item('back', spr.bx - spr.brx * .95, spr.by - spr.bry * .2, spr.brx * 1.7);
+      cv.drawImageRect(pim, Rect.fromLTWH(0, 0, pim.width.toDouble(), pim.height.toDouble()), const Rect.fromLTWH(0, 0, sz, sz), paint);
+      await item('neck', spr.hx, spr.hy + spr.hry * .95, spr.brx * 1.05);
+      await item('face', spr.hx, spr.ey + .6, spr.hrx * 1.45);
+      await item('hat', spr.hx, spr.hy - spr.hry * .95 - spr.hrx * 1.5 * .12, spr.hrx * 1.5);
+      await item('hand', spr.bx + spr.brx * 1.1, spr.by + spr.bry * .15, spr.brx * 1.3);
+    }
+    final out = await rec.endRecording().toImage(sz.toInt(), sz.toInt());
+    final bd = await out.toByteData(format: ui.ImageByteFormat.png);
+    if (bd == null) return;
+    final path = '${Directory.systemTemp.path}/konj_pet_widget.png';
+    await File(path).writeAsBytes(bd.buffer.asUint8List());
+    final lv = (h['lv'] as int?) ?? 1;
+    await HomeWidget.saveWidgetData<String>('petImg', path);
+    await HomeWidget.saveWidgetData<String>('petName', '${h['n']}');
+    await HomeWidget.saveWidgetData<String>('petInfo', hatched ? '${animalById('${h['a']}').name} • ${stageNames[stageOf(lv)]} • سطح $lv' : '🥚 تخم (برای باز کردنش وارد برنامه شو)');
+    await HomeWidget.saveWidgetData<int>('petSat', Gm.sat(h).round());
+    await HomeWidget.saveWidgetData<int>('petSatT', DateTime.now().millisecondsSinceEpoch);
+    await HomeWidget.saveWidgetData<String>('petBtn', hatched ? 'غذا دادن' : 'باز کردن تخم');
+    await HomeWidget.updateWidget(androidName: 'KonjPetWidgetProvider');
+  } catch (_) {}
+}
+
+int? parseAmt(String s) {
+  const fa = '۰۱۲۳۴۵۶۷۸۹', ar = '٠١٢٣٤٥٦٧٨٩';
+  var o = '';
+  for (final ch in s.split('')) {
+    final i1 = fa.indexOf(ch), i2 = ar.indexOf(ch);
+    if (i1 >= 0) {
+      o += '$i1';
+    } else if (i2 >= 0) {
+      o += '$i2';
+    } else if (RegExp(r'[0-9]').hasMatch(ch)) {
+      o += ch;
+    }
+  }
+  return int.tryParse(o);
+}
+
+({String key, String text})? occasion() {
+  final n = DateTime.now();
+  final j = g2j(n.year, n.month, n.day);
+  if (j[1] == 1 && j[2] <= 13) return (key: 'nowruz', text: '🌱 نوروزت مبارک! سال نو پر از شادی');
+  if (j[1] == 9 && j[2] == 30) return (key: 'yalda', text: '🍉 شب یلدات مبارک!');
+  if (j[1] == 12 && j[2] >= 25) return (key: 'esfand', text: '🌸 آماده‌ی خونه‌تکونی و بهار!');
+  return null;
+}
+
+class Mission {
+  final String id, text, key;
+  final int target, reward;
+  const Mission(this.id, this.text, this.key, this.target, this.reward);
+}
+
+const dailyPool = [
+  Mission('d_tasks3', '۳ کار رو انجام بده', 'tasks', 3, 15),
+  Mission('d_tasks5', '۵ کار رو انجام بده', 'tasks', 5, 25),
+  Mission('d_habit2', '۲ عادت رو تیک بزن', 'habits', 2, 12),
+  Mission('d_focus25', '۲۵ دقیقه تمرکز کن', 'focusMin', 25, 20),
+  Mission('d_feed', 'به پتت غذا بده', 'feed', 1, 10),
+  Mission('d_game', 'مینی‌بازی گرفتن غذا رو بازی کن', 'game', 1, 10),
+  Mission('d_memo', 'بازی حافظه رو بازی کن', 'memo', 1, 10),
+  Mission('d_review', 'امروز رو بازبینی کن', 'review', 1, 12),
+];
+const weeklyList = [
+  Mission('w_focus5', 'این هفته ۵ جلسه تمرکز', 'focusN', 5, 80),
+  Mission('w_tasks20', 'این هفته ۲۰ کار انجام بده', 'tasks', 20, 100),
+  Mission('w_review4', 'این هفته ۴ بار روز رو بازبینی کن', 'review', 4, 70),
+];
+
+class Mn {
+  static Map<String, dynamic> d = {};
+
+  static String weekKey() {
+    final n = DateTime.now();
+    return ds(DateTime(n.year, n.month, n.day - ((n.weekday + 1) % 7)));
+  }
+
+  static void load() {
+    try {
+      d = Map<String, dynamic>.from(jsonDecode(prefs.getString('mc') ?? '{}') as Map);
+    } catch (_) {
+      d = {};
+    }
+    final day = ds(DateTime.now()), wk = weekKey();
+    if (d['day'] != day) {
+      d['day'] = day;
+      d['dc'] = <String, dynamic>{};
+      d['dcl'] = <dynamic>[];
+    }
+    if (d['wk'] != wk) {
+      d['wk'] = wk;
+      d['wc'] = <String, dynamic>{};
+      d['wcl'] = <dynamic>[];
+    }
+  }
+
+  static void save() => prefs.setString('mc', jsonEncode(d));
+
+  static void inc(String k, [int n = 1]) {
+    load();
+    final dc = d['dc'] as Map, wc = d['wc'] as Map;
+    dc[k] = ((dc[k] as int?) ?? 0) + n;
+    wc[k] = ((wc[k] as int?) ?? 0) + n;
+    save();
+  }
+
+  static List<Mission> today() {
+    load();
+    final seed = ('${d['day']}').codeUnits.fold<int>(7, (a, b) => (a * 31 + b) % 1000003);
+    final idx = List<int>.generate(dailyPool.length, (i) => i)..shuffle(math.Random(seed));
+    return [for (final i in idx.take(3)) dailyPool[i]];
+  }
+
+  static int prog(Mission m, bool weekly) => (((weekly ? d['wc'] : d['dc']) as Map)[m.key] as int?) ?? 0;
+  static bool claimed(Mission m, bool weekly) => ((weekly ? d['wcl'] : d['dcl']) as List).contains(m.id);
+  static bool ready(Mission m, bool weekly) => !claimed(m, weekly) && prog(m, weekly) >= m.target;
+
+  static int readyCount() {
+    load();
+    return today().where((m) => ready(m, false)).length + weeklyList.where((m) => ready(m, true)).length;
+  }
+
+  static void claim(Mission m, bool weekly) {
+    load();
+    if (!ready(m, weekly)) return;
+    (weekly ? d['wcl'] : d['dcl'] as List).add(m.id);
+    Gm.coins += m.reward;
+    Gm.addXp(m.reward);
+    Gm.say('✅ ماموریت انجام شد: +${m.reward} سکه 🪙');
+    final t = today();
+    if (!weekly && t.every((x) => claimed(x, false)) && !((d['dcl'] as List).contains('bonus'))) {
+      (d['dcl'] as List).add('bonus');
+      Gm.coins += 25;
+      Gm.say('🎉 هر ۳ ماموریت امروز تموم شد!\nجایزه‌ی ویژه: ۲۵ سکه', true);
+    }
+    save();
+    Gm.save();
+  }
+}
+
+void repeatNext(Map k) {
+  final rp = '${k['rep'] ?? 'none'}';
+  if (rp == 'none' || k['repDone'] == true) return;
+  k['repDone'] = true;
+  final now = DateTime.now();
+  final base = k['r'] != null ? DateTime.parse(k['r']) : DateTime(now.year, now.month, now.day, 9, 0);
+  DateTime nx(DateTime x) => rp == 'daily' ? DateTime(x.year, x.month, x.day + 1, x.hour, x.minute) : (rp == 'weekly' ? DateTime(x.year, x.month, x.day + 7, x.hour, x.minute) : DateTime(x.year, x.month + 1, x.day, x.hour, x.minute));
+  var nxt = nx(base);
+  while (nxt.isBefore(now)) {
+    nxt = nx(nxt);
+  }
+  final c = Map<String, dynamic>.from(k);
+  c['id'] = D.tasks.fold<int>(0, (a, t) => math.max(a, t['id'] as int)) + 1;
+  c['done'] = false;
+  c['doneAt'] = null;
+  c['rw'] = false;
+  c['repDone'] = false;
+  c['r'] = nxt.toIso8601String();
+  c['subs'] = [for (final x in ((k['subs'] as List?) ?? []).cast<Map>()) {'t': x['t'], 'done': false}];
+  D.tasks.add(c);
+  scheduleTask(c).catchError((_) {});
+}
+
+class MemoryGame extends StatefulWidget {
+  const MemoryGame({super.key});
+  @override
+  State<MemoryGame> createState() => _MemoryGameState();
+}
+
+class _MemoryGameState extends State<MemoryGame> {
+  static const pool = ['🍎', '🐟', '🍖', '🍪', '🥚', '🍰', '🍇', '🥕'];
+  static const maxPlays = 2;
+  late final List<String> cards;
+  final open = List<bool>.filled(12, false), matched = List<bool>.filled(12, false);
+  int? first;
+  int moves = 0;
+  bool lock = false, started = false, over = false, ready = false;
+  String result = '';
+  String get _key => 'mm:${ds(DateTime.now())}';
+  int get plays => prefs.getInt(_key) ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    final p = [...pool]..shuffle();
+    final six = p.take(6).toList();
+    cards = [...six, ...six]..shuffle();
+    Future.wait([for (final e in pool) pixelEmoji(e)]).whenComplete(() {
+      if (mounted) setState(() => ready = true);
+    });
+  }
+
+  void _start() {
+    if (!ready || plays >= maxPlays) return;
+    prefs.setInt(_key, plays + 1);
+    setState(() => started = true);
+  }
+
+  Future<void> _tap(int i) async {
+    if (!started || over || lock || open[i] || matched[i]) return;
+    sfx('add');
+    setState(() => open[i] = true);
+    if (first == null) {
+      first = i;
+      return;
+    }
+    final a = first!;
+    first = null;
+    moves++;
+    if (cards[a] == cards[i]) {
+      matched[a] = true;
+      matched[i] = true;
+      sfx('done');
+      if (matched.every((x) => x)) _finish();
+      setState(() {});
+    } else {
+      lock = true;
+      await Future.delayed(const Duration(milliseconds: 750));
+      if (!mounted) return;
+      setState(() {
+        open[a] = false;
+        open[i] = false;
+        lock = false;
+      });
+    }
+  }
+
+  void _finish() {
+    over = true;
+    final c = moves <= 8 ? 20 : (moves <= 12 ? 14 : (moves <= 16 ? 8 : 4));
+    final rest = maxPlays - plays;
+    result = 'تموم شد با $moves حرکت\nجایزه: $c سکه 🪙\n${rest > 0 ? '$rest بار دیگه امروز می‌تونی بازی کنی.' : 'سهم امروزت تموم شد؛ فردا دوباره بیا 🌙'}';
+    Gm.earn(c, c);
+    Mn.inc('memo');
+    sfx('hatch');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locked = plays >= maxPlays && !started;
+    return Scaffold(
+        appBar: AppBar(title: Text('بازی حافظه • حرکت: $moves')),
+        body: Stack(children: [
+          GridView.count(
+              padding: const EdgeInsets.all(16),
+              crossAxisCount: 3,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              children: [
+                for (var i = 0; i < 12; i++)
+                  GestureDetector(
+                      onTap: () => _tap(i),
+                      child: Container(
+                          decoration: BoxDecoration(color: matched[i] ? Colors.green.withOpacity(.25) : Theme.of(context).colorScheme.secondaryContainer, borderRadius: BorderRadius.circular(14)),
+                          child: Center(child: open[i] || matched[i] ? PxEmoji(cards[i], 52) : const Text('❓', style: TextStyle(fontSize: 30))))),
+              ]),
+          if (!started || over)
+            Center(
+                child: Card(
+                    margin: const EdgeInsets.all(24),
+                    child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          Text(over ? 'آفرین!' : 'بازی حافظه 🧠', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          Text(over ? result : (locked ? 'امروز $maxPlays بار بازی کردی. فردا دوباره بیا 🌙' : 'کارت‌ها رو بزن و جفت‌هاشون رو پیدا کن. هر چی حرکت کمتر، سکه بیشتر.\nروزی فقط $maxPlays بار (${maxPlays - plays} بار مونده).'), textAlign: TextAlign.center),
+                          const SizedBox(height: 12),
+                          FilledButton(onPressed: over || locked ? () => Navigator.pop(context) : (ready ? _start : null), child: Text(over || locked ? 'بستن' : (ready ? 'شروع' : 'در حال آماده‌سازی…'))),
+                        ])))),
+        ]));
+  }
+}
+
+Future<void> scheduleFocusRem() async {
+  final h = prefs.getInt('focusRem') ?? -1;
+  try {
+    await notif.cancel(800002);
+  } catch (_) {}
+  if (h >= 0) await zs(800002, 'وقت تمرکزه 🧠', 'ساعت طلایی‌ته! یه جلسه تمرکز بزن.', nextDaily(h * 60), daily: true);
+}
+
+const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
+const String kVer = '1.0.7';
+const kWhatsNew = [
+  '☁️ پشتیبان‌گیری آنلاین از همه‌ی اطلاعات (میز کار ← پشتیبان‌گیری)',
+  '🎯 ماموریت‌های روزانه و هفتگی با جایزه',
+  '📔 حال روز و بازبینی روز یکی شد؛ آیکون بالای صفحه',
+  '🗑️ سطل بازیافت: هر چیزی که حذف کنی ۱۰ دقیقه قابل بازگردانیه',
+  '🏁 اهداف زیرمجموعه دارن و درصد پیشرفت خودکار حساب می‌شه',
+  '🐾 ویجت پت، آلبوم پت‌ها، بازی حافظه و غذاهای ویژه‌ی هفته',
+  '🔁 کارهای تکراری، هدف پس‌انداز، پیشنهاد بودجه و گزارش متنی ماه',
+  '💼 میز کار: نقش سرپرست، رتبه‌بندی هفتگی و اعلان کار جدید',
+];
+
+class UpdInfo {
+  final int build;
+  final String name, notes, url;
+  UpdInfo(this.build, this.name, this.notes, this.url);
+}
+
+Future<UpdInfo?> checkUpdate() async {
+  try {
+    final repo = (await rootBundle.loadString('assets/repo.txt')).trim();
+    if (repo.isEmpty || repo.contains('REPLACE')) return null;
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    final req = await client.getUrl(Uri.parse('https://api.github.com/repos/$repo/releases/latest'));
+    req.headers.set('User-Agent', 'konj-planner');
+    req.headers.set('Accept', 'application/vnd.github+json');
+    final res = await req.close().timeout(const Duration(seconds: 10));
+    final body = await res.transform(utf8.decoder).join();
+    client.close();
+    if (res.statusCode != 200) return null;
+    final j = jsonDecode(body) as Map;
+    final tag = '${j['tag_name']}';
+    final b = int.tryParse(RegExp(r'(\d+)$').firstMatch(tag)?.group(1) ?? '') ?? 0;
+    var url = '${j['html_url']}';
+    for (final a in (j['assets'] as List? ?? [])) {
+      if ('${a['name']}'.endsWith('.apk')) {
+        url = '${a['browser_download_url']}';
+        break;
+      }
+    }
+    return UpdInfo(b, '${j['name'] ?? tag}', '${j['body'] ?? ''}', url);
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<String?> askText(BuildContext c, String title, {String init = '', int lines = 1}) {
+  final t = TextEditingController(text: init);
+  return showDialog<String>(
+      context: c,
+      builder: (ctx) => AlertDialog(
+            title: Text(title),
+            content: TextField(controller: t, autofocus: true, maxLines: lines, minLines: 1),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('لغو')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, t.text.trim()), child: const Text('تأیید')),
+            ],
+          ));
 }
 
 final checkinReq = ValueNotifier<int>(0);
@@ -1887,7 +3121,11 @@ class D {
         'jal': jal,
         'hope': prefs.getInt('hope') ?? -1,
         'hero': prefs.getString('hero') ?? '{}',
-        'moods': prefs.getString('moods') ?? '{}'
+        'moods': prefs.getString('moods') ?? '{}',
+        'reviews': prefs.getString('reviews') ?? '{}',
+        'sav': prefs.getString('sav') ?? '[]',
+        'mc': prefs.getString('mc') ?? '{}',
+        'fh': prefs.getString('fh') ?? '{}'
       });
 
   static Future<bool> restore(String s) async {
@@ -1913,6 +3151,9 @@ class D {
       if (m['hope'] is int) await prefs.setInt('hope', m['hope']);
       if (m['hero'] is String) await prefs.setString('hero', m['hero']);
       if (m['moods'] is String) await prefs.setString('moods', m['moods']);
+      for (final k in ['reviews', 'sav', 'mc', 'fh']) {
+        if (m[k] is String) await prefs.setString(k, m[k]);
+      }
       load();
       Gm.load();
       look.value++;
@@ -1957,6 +3198,7 @@ Future<void> syncHomeWidget() async {
     await HomeWidget.saveWidgetData<String>('items', jsonEncode(items));
     await HomeWidget.updateWidget(androidName: 'KonjPlannerWidgetProvider');
   } catch (_) {}
+  syncPetWidget();
 }
 
 // ───────────────────────── اعلان‌ها ─────────────────────────
@@ -1980,6 +3222,7 @@ Future<void> widgetBackground(Uri? uri) async {
     hit.first['done'] = true;
     hit.first['doneAt'] = today;
     Gm.taskDone(hit.first);
+    repeatNext(hit.first);
   } else {
     final hit = D.habits.where((x) => x['id'] == id).toList();
     if (hit.isEmpty) return;
@@ -1998,13 +3241,14 @@ Future<void> widgetBackground(Uri? uri) async {
 
 const nd = NotificationDetails(
   android: AndroidNotificationDetails(
-    'konj_reminders_v3',
+    'konj_reminders_v4',
     'یادآوری‌های Konj Planner',
     channelDescription: 'یادآوری کارها، برنامه‌ها و پیام‌های روزانه',
     importance: Importance.max,
     priority: Priority.high,
     playSound: true,
     sound: RawResourceAndroidNotificationSound('konj_notify'),
+    audioAttributesUsage: AudioAttributesUsage.notification,
     enableVibration: true,
     channelShowBadge: true,
     icon: 'ic_notif',
@@ -2044,7 +3288,8 @@ int habitNid(int id) => 1200000000 + (id.abs() % 300000000);
 Future<void> scheduleHabit(Map h) async {
   final r = h['rem'];
   if (r is! int) return;
-  await zs(habitNid(h['id'] as int), 'عادت: ${h['t']}', (h['min'] ?? '').toString().isEmpty ? 'وقتشه! امروز انجامش بده 🔥' : 'حداقلش: ${h['min']}', nextDaily(r), daily: true);
+  final pn = Gm.heroes.isEmpty ? null : '${Gm.heroes[Gm.active]['n']}';
+  await zs(habitNid(h['id'] as int), pn == null ? 'عادت: ${h['t']}' : '$pn می‌گه: وقتشه ${h['t']}!', (h['min'] ?? '').toString().isEmpty ? 'وقتشه! امروز انجامش بده 🔥' : 'حداقلش: ${h['min']}', nextDaily(r), daily: true);
 }
 
 Future<void> scheduleCheckin(int m) async {
@@ -2136,6 +3381,9 @@ Future<void> scheduleAll() async {
       await scheduleHabit(hb);
     } catch (_) {}
   }
+  try {
+    await scheduleFocusRem();
+  } catch (_) {}
   final ck = prefs.getInt('chk') ?? 1290;
   try {
     await scheduleCheckin(ck);
@@ -2189,6 +3437,9 @@ class _BootstrapState extends State<Bootstrap> {
       jal = prefs.getBool('jal') ?? true;
       D.load();
       Gm.load();
+      Sb.load();
+      Mn.load();
+      sfxInit();
 
       if (!mounted) return;
       setState(() => ready = true);
@@ -2331,7 +3582,7 @@ const _pages = [
   _GP(Icons.account_balance_wallet, 'مالی',
       '• با + هزینه یا درآمد ثبت کن. مبلغ خودش هر سه رقم با نقطه جدا می‌شه تا خوندنش راحت باشه.\n• دسته رو انتخاب کن؛ با «مدیریت دسته‌ها» خودت دسته اضافه یا حذف کن.\n• روی هر تراکنش بزنی می‌تونی مبلغ، دسته و تاریخش رو اصلاح کنی. با آیکون سطل یا کشیدن حذف می‌شه.\n• بالای صفحه جمع امروز، دیروز، این هفته، هفته‌ی قبل، این ماه و ماه قبل (با نام ماه شمسی) هست. با «تاریخچه» روزها، هفته‌ها و ماه‌های گذشته رو می‌بینی.\n• بودجه‌ی ماه جاری با میزان مصرف و باقی‌مانده هر دسته توی همین صفحه نشون داده می‌شه.'),
   _GP(Icons.timer, 'تمرکز و قهرمان',
-      '• در بخش تمرکز، مدت رو انتخاب کن و تایمر رو شروع کن؛ بعد از تموم شدنش سکه می‌گیری.\n• با انجام کارها، عادت‌ها و رسیدن به هدف هم سکه و تجربه می‌گیری.\n• در بخش قهرمان یه حیوون بساز و اسمش رو بذار. با سکه براش غذا و آیتم بخر. غذا تجربه می‌ده و سطحش رو بالا می‌بره.\n• پت از تخم شروع می‌شه: سه بار روش بزن تا باز بشه. با بالا رفتن سطح بزرگ‌تر می‌شه و غذا و آیتم‌ها رو توی صحنه می‌بینی.\n• وقتی تمرکز روشنه نمی‌تونی از برنامه بیرون بری؛ اگه بری جلسه متوقف می‌شه.\n• پت سیری داره و کم‌کم گرسنه می‌شه؛ گرسنه که باشه تجربه‌ها نصف حساب می‌شن. پت سیر هنگام تمرکز ۲۵٪ سکه‌ی اضافه می‌ده.\n• تخم‌ها گاهی نادر 💎 یا افسانه‌ای 👑 درمیان؛ «تخم ویژه» حتماً یکی از این دوتاست. در سطح ۳۰ پت به شکل افسانه‌ای تکامل پیدا می‌کنه.\n• از فروشگاه می‌تونی پس‌زمینه‌ی غار، ساحل، قلعه یا فضا بخری. دشت پیش‌فرض با فصل‌ها عوض می‌شه.\n• مینی‌بازی «گرفتن غذا» روزی حداکثر ۲ بار قابل بازیه و جایزه‌ی سکه داره.\n• زنجیره‌ی عادت‌ها و رسیدن به اهداف جایزه‌ی ویژه داره.\n• با آیکون 🙂 بالای صفحه، حال و خلاصه‌ی امروزت رو ثبت می‌کنی.'),
+      '• در بخش تمرکز، مدت رو انتخاب کن و تایمر رو شروع کن؛ بعد از تموم شدنش سکه می‌گیری.\n• با انجام کارها، عادت‌ها و رسیدن به هدف هم سکه و تجربه می‌گیری.\n• در بخش قهرمان یه حیوون بساز و اسمش رو بذار. با سکه براش غذا و آیتم بخر. غذا تجربه می‌ده و سطحش رو بالا می‌بره.\n• پت از تخم شروع می‌شه: سه بار روش بزن تا باز بشه. با بالا رفتن سطح بزرگ‌تر می‌شه و غذا و آیتم‌ها رو توی صحنه می‌بینی.\n• وقتی تمرکز روشنه نمی‌تونی از برنامه بیرون بری؛ اگه بری جلسه متوقف می‌شه.\n• پت سیری داره و کم‌کم گرسنه می‌شه؛ گرسنه که باشه تجربه‌ها نصف حساب می‌شن. پت سیر هنگام تمرکز ۲۵٪ سکه‌ی اضافه می‌ده.\n• تخم‌ها گاهی نادر 💎 یا افسانه‌ای 👑 درمیان؛ «تخم ویژه» حتماً یکی از این دوتاست. در سطح ۳۰ پت به شکل افسانه‌ای تکامل پیدا می‌کنه.\n• از فروشگاه می‌تونی پس‌زمینه‌ی غار، ساحل، قلعه یا فضا بخری. دشت پیش‌فرض با فصل‌ها عوض می‌شه.\n• مینی‌بازی «گرفتن غذا» روزی حداکثر ۲ بار قابل بازیه و جایزه‌ی سکه داره.\n• پت رو می‌تونی بفروشی (قیمت با سطح بیشتر می‌شه) و با سکه رنگش رو عوض کنی. هر پت صدای مخصوص خودش رو داره.\n• تمرکز ۶۰ دقیقه‌ای روزی یک بار ممکنه و حین تمرکز سؤال ساده می‌پرسم. پاداش تمرکز روزی ۱۸۰ دقیقه سقف داره.\n• از منو «میز کار» (پروژه و کار تیمی آنلاین) و «تاریخچه‌ی روزها» رو باز کن.\n• زنجیره‌ی عادت‌ها و رسیدن به اهداف جایزه‌ی ویژه داره.\n• با آیکون 🙂 بالای صفحه، حال و خلاصه‌ی امروزت رو ثبت می‌کنی.'),
   _GP(Icons.settings, 'تنظیمات',
       'با آیکون چرخ‌دنده:\n• رنگ برنامه و حالت روشن/تیره (نارنجی با پس‌زمینه‌ی خاکستری تیره هم داریم)\n• نمایش تاریخ شمسی\n• روشن/خاموش کردن صدای محیط برنامه\n• پیام امیدبخش روزانه: ساعتش رو انتخاب کن. دکمه‌ی «ارسال آزمایشی» هم برای تست هست.\n• پشتیبان‌گیری: از اطلاعاتت کپی نگه دار و هر وقت خواستی بازیابی کن.'),
   _GP(Icons.notifications_active, 'اجازه‌ها',
@@ -2422,7 +3673,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
   final stageKey = GlobalKey<PetStageState>();
   Uri? _pendingUri;
   bool _booted = false, _viaWidget = false;
-  Timer? _ft;
+  Timer? _ft, _wsT;
   DateTime? rf, rt;
   String q = '';
   DateTime sel = DateTime.now();
@@ -2443,8 +3694,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
       notif.cancel(7777);
     }
     _focusResume();
+    _wsT = Timer.periodic(const Duration(seconds: 90), (_) => _pollWs());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _booted = true;
+      Future.delayed(const Duration(seconds: 6), _pollWs);
       if (_pendingUri != null) {
         final u = _pendingUri;
         _pendingUri = null;
@@ -2497,6 +3750,33 @@ class _H extends State<Home> with WidgetsBindingObserver {
       return;
     }
     final now = DateTime.now(), today = ds(now);
+    if (kBuild > 0 && (prefs.getInt('lastBuild') ?? 0) != kBuild) {
+      final first = (prefs.getInt('lastBuild') ?? 0) == 0;
+      await prefs.setInt('lastBuild', kBuild);
+      if (!first && mounted) {
+        await showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+                  title: Text('🎉 تازه‌های نسخه‌ی $kVer'),
+                  content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [for (final w in kWhatsNew) Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Text(w))])),
+                  actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('عالیه!'))],
+                ));
+      }
+    }
+    final oc = occasion();
+    if (oc != null && Gm.rw.add('occ:${now.year}:${oc.key}')) {
+      Gm.coins += 50;
+      Gm.save();
+      if (mounted) {
+        await showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+                  title: Text(oc.text),
+                  content: const Text('هدیه‌ی ۵۰ سکه برای تو 🎁'),
+                  actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ممنون'))],
+                ));
+      }
+    }
     if (prefs.getString('hopeDay') != today && !_viaWidget) {
       await prefs.setString('hopeDay', today);
       if (!mounted) return;
@@ -2513,18 +3793,131 @@ class _H extends State<Home> with WidgetsBindingObserver {
       await prefs.setString('chkDay', today);
       if (mounted) checkinDialog();
     }
+    if (mounted) _checkUpdate();
+  }
+
+  Future<void> _checkUpdate({bool manual = false}) async {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (!manual && nowMs - (prefs.getInt('updAt') ?? 0) < 6 * 3600000) return;
+    prefs.setInt('updAt', nowMs);
+    final u = await checkUpdate();
+    if (!mounted) return;
+    if (u == null) {
+      if (manual) toast('بررسی بروزرسانی ممکن نشد (اینترنت یا تنظیم ریپو رو چک کن)');
+      return;
+    }
+    if (kBuild == 0 || u.build <= kBuild) {
+      if (manual) toast('نسخه‌ی شما آخرین نسخه است ✓');
+      return;
+    }
+    if ((prefs.getInt('fEnd') ?? 0) > 0) return;
+    await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('🎉 نسخه‌ی جدید آماده است'),
+              content: SingleChildScrollView(child: Text(u.notes.trim().isEmpty ? u.name : u.notes.trim())),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('بعداً')),
+                FilledButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      try {
+                        shakeCh.invokeMethod('openUrl', u.url);
+                      } catch (_) {}
+                    },
+                    child: const Text('دانلود و نصب')),
+              ],
+            ));
   }
 
   // ── تمرکز ──
+  bool _qOpen = false;
+  BuildContext? _qCtx;
+
+  void _closeQuiz() {
+    if (_qOpen && _qCtx != null) {
+      try {
+        Navigator.of(_qCtx!).pop(true);
+      } catch (_) {}
+    }
+  }
+
+  int _nextQ() => DateTime.now().millisecondsSinceEpoch + (6 + math.Random().nextInt(4)) * 60000;
+
+  // سؤال امنیتی: اگر جواب ندی یا غلط بدی تمرکز متوقف می‌شه
+  Future<void> _askQuiz() async {
+    _qOpen = true;
+    final rnd = math.Random();
+    final a = 3 + rnd.nextInt(9), b = 2 + rnd.nextInt(8), ans = a + b;
+    final opts = <int>{ans};
+    while (opts.length < 3) {
+      final d = rnd.nextInt(9) - 4;
+      if (d != 0 && ans + d > 0) opts.add(ans + d);
+    }
+    final list = opts.toList()..shuffle();
+    var secs = 25;
+    var done = false;
+    Timer? tm;
+    sfx('add');
+    final ok = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) {
+          _qCtx = ctx;
+          return StatefulBuilder(builder: (ctx, set) {
+            tm ??= Timer.periodic(const Duration(seconds: 1), (t) {
+              secs--;
+              if (secs <= 0) {
+                t.cancel();
+                if (!done && ctx.mounted) Navigator.of(ctx).pop(false);
+              } else if (ctx.mounted) {
+                set(() {});
+              }
+            });
+            return PopScope(
+                canPop: false,
+                child: AlertDialog(
+                  title: Text('هنوز اینجایی؟ ⏱ $secs'),
+                  content: Text('برای ادامه‌ی تمرکز جواب بده:\n\n$a + $b = ؟', style: const TextStyle(fontSize: 18)),
+                  actions: [
+                    for (final o in list)
+                      FilledButton.tonal(
+                          onPressed: () {
+                            done = true;
+                            Navigator.of(ctx).pop(o == ans);
+                          },
+                          child: Text('$o')),
+                  ],
+                ));
+          });
+        });
+    tm?.cancel();
+    _qOpen = false;
+    _qCtx = null;
+    if ((prefs.getInt('fEnd') ?? 0) <= 0) return;
+    if (ok == true) {
+      prefs.setInt('fQ', _nextQ());
+    } else {
+      _focusFail();
+      _checkFocusFail();
+    }
+  }
+
   void _focusTick() {
     final end = prefs.getInt('fEnd') ?? 0;
     if (end == 0) {
       _ft?.cancel();
       return;
     }
-    if (DateTime.now().millisecondsSinceEpoch >= end) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now >= end) {
       _focusFinish();
-    } else if (mounted && tab == 4) {
+      return;
+    }
+    final q = prefs.getInt('fQ') ?? 0;
+    if (q > 0 && now >= q && !_qOpen && end - now > 25000 && mounted) {
+      _askQuiz();
+    } else if (mounted && tab == 4 && !_qOpen) {
       setState(() {});
     }
   }
@@ -2545,6 +3938,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   void _focusFail() {
     prefs.setInt('fEnd', 0);
+    prefs.setInt('fQ', 0);
     prefs.setInt('fFail', 1);
     _ft?.cancel();
     notif.cancel(7777);
@@ -2569,11 +3963,15 @@ class _H extends State<Home> with WidgetsBindingObserver {
   }
 
   Future<void> _focusStart() async {
+    if (fMin == 60 && prefs.getString('f60') == ds(DateTime.now())) {
+      toast('تمرکز ۶۰ دقیقه‌ای فقط روزی یک بار ممکنه؛ یه جلسه‌ی کوتاه‌تر انتخاب کن');
+      return;
+    }
     final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
               title: const Text('شروع تمرکز؟'),
-              content: Text('تا $fMin دقیقه‌ی آینده نمی‌تونی از این بخش بیرون بیای. اگه از برنامه خارج بشی، جلسه متوقف می‌شه و سکه‌ای نمی‌گیری.\n\nصفحه روشن می‌مونه.'),
+              content: Text('تا $fMin دقیقه‌ی آینده نمی‌تونی از این بخش بیرون بیای. اگه از برنامه خارج بشی، جلسه متوقف می‌شه و سکه‌ای نمی‌گیری.\n\nحین جلسه چند بار یه سؤال ساده می‌پرسم؛ اگه جواب ندی تمرکز قطع می‌شه.\n\nصفحه روشن می‌مونه.'),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')),
                 FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('شروع')),
@@ -2582,6 +3980,8 @@ class _H extends State<Home> with WidgetsBindingObserver {
     if (ok != true) return;
     _keepOn(true);
     tab = 4;
+    if (fMin == 60) await prefs.setString('f60', ds(DateTime.now()));
+    await prefs.setInt('fQ', _nextQ());
     final end = DateTime.now().add(Duration(minutes: fMin)).millisecondsSinceEpoch;
     await prefs.setInt('fEnd', end);
     await prefs.setInt('fLen', fMin);
@@ -2596,7 +3996,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
     _ft?.cancel();
     notif.cancel(7777);
     _keepOn(false);
+    prefs.setInt('fQ', 0);
+    _closeQuiz();
     Gm.focusDone(len);
+    Future.delayed(const Duration(seconds: 3), _offerBreak);
     if (mounted) setState(() {});
   }
 
@@ -2613,6 +4016,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
             ));
     if (ok != true) return;
     await prefs.setInt('fEnd', 0);
+    await prefs.setInt('fQ', 0);
     _ft?.cancel();
     notif.cancel(7777);
     _keepOn(false);
@@ -2624,6 +4028,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     Gm.onEvent = null;
     checkinReq.removeListener(_onCheckinReq);
     _ft?.cancel();
+    _wsT?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -2635,8 +4040,13 @@ class _H extends State<Home> with WidgetsBindingObserver {
       _focusFail();
       return;
     }
+    if (s == AppLifecycleState.paused && Sb.ok && Sb.loggedIn && (prefs.getBool('autoBk') ?? false) && DateTime.now().millisecondsSinceEpoch - (prefs.getInt('bkAt') ?? 0) > 1800000) {
+      Sb.backupNow().catchError((_) {});
+    }
     if (s != AppLifecycleState.resumed) return;
+    _pollWs();
     _checkFocusFail();
+    _checkUpdate();
     await prefs.reload();
     D.load();
     Gm.load();
@@ -2648,7 +4058,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   void _widgetUri(Uri? u) {
     if (u == null || !mounted) return;
-    if (u.host != 'addtask' && u.host != 'addtx') return;
+    if (u.host != 'addtask' && u.host != 'addtx' && u.host != 'pet') return;
     if (!_booted) {
       _pendingUri = u;
       return;
@@ -2660,7 +4070,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await Future.delayed(const Duration(milliseconds: 200));
       if (!mounted) return;
-      if (u.host == 'addtask') {
+      if (u.host == 'pet') {
+        setState(() {
+          tab = 5;
+          hv = 1;
+        });
+      } else if (u.host == 'addtask') {
         setState(() => tab = 0);
         taskSheet();
       } else {
@@ -2678,10 +4093,86 @@ class _H extends State<Home> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  // ── سطل بازیافت: هر چیزی که حذف می‌شه ۱۰ دقیقه قابل بازگردانیه ──
+  List<Map<String, dynamic>> _binList() {
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      return [
+        for (final e in (jsonDecode(prefs.getString('trash') ?? '[]') as List))
+          if (now - ((e['at'] as num).toInt()) < 600000) Map<String, dynamic>.from(e as Map)
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  void _binAdd(String type, Map item, int idx) {
+    final l = _binList()..add({'type': type, 'at': DateTime.now().millisecondsSinceEpoch, 'idx': idx, 'item': item});
+    prefs.setString('trash', jsonEncode(l));
+  }
+
+  void _binDrop(String type, Map item) {
+    final l = _binList()..removeWhere((e) => e['type'] == type && (e['item'] as Map)['id'] == item['id']);
+    prefs.setString('trash', jsonEncode(l));
+  }
+
+  Future<void> _binRestore(Map<String, dynamic> e) async {
+    final item = Map<String, dynamic>.from(e['item'] as Map);
+    final i = (e['idx'] as num).toInt();
+    final List list = switch (e['type']) {
+      'task' => D.tasks,
+      'event' => D.events,
+      'tx' => D.txs,
+      'goal' => D.goals,
+      _ => D.habits,
+    };
+    list.insert(i.clamp(0, list.length).toInt(), item);
+    _binDrop('${e['type']}', item);
+    upd();
+    if (e['type'] == 'task') await scheduleTask(item);
+    if (e['type'] == 'event') await schedule(item);
+    if (e['type'] == 'habit') scheduleAll();
+  }
+
+  void binSheet() {
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
+              final l = _binList()..sort((a, b) => (b['at'] as int).compareTo(a['at'] as int));
+              const names = {'task': 'کار', 'event': 'برنامه', 'tx': 'تراکنش', 'goal': 'هدف', 'habit': 'عادت'};
+              return SafeArea(
+                  child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        const Text('🗑️ سطل بازیافت', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        const Text('هر چیزی که حذف می‌کنی تا ۱۰ دقیقه این‌جا می‌مونه و قابل بازگردانیه.', style: TextStyle(fontSize: 12)),
+                        const SizedBox(height: 6),
+                        if (l.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('سطل خالیه.', textAlign: TextAlign.center)),
+                        Flexible(
+                            child: ListView(shrinkWrap: true, children: [
+                          for (final e in l)
+                            ListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: Text('${(e['item'] as Map)['t'] ?? (e['item'] as Map)['c'] ?? '—'}'),
+                                subtitle: Text('${names[e['type']] ?? ''} • ${(10 - (DateTime.now().millisecondsSinceEpoch - (e['at'] as int)) ~/ 60000).clamp(0, 10)} دقیقه‌ی دیگه'),
+                                trailing: FilledButton.tonal(
+                                    onPressed: () async {
+                                      await _binRestore(e);
+                                      set(() {});
+                                      toast('بازگردانده شد');
+                                    },
+                                    child: const Text('بازگردانی'))),
+                        ])),
+                      ])));
+            }));
+  }
+
   void undo(String msg, VoidCallback back) {
     final m = ScaffoldMessenger.of(context);
     m.hideCurrentSnackBar();
-    m.showSnackBar(SnackBar(content: Text(msg), action: SnackBarAction(label: 'بازگردانی', onPressed: back)));
+    m.showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 5), action: SnackBarAction(label: 'بازگردانی', onPressed: back)));
   }
 
   void toast(String msg) {
@@ -2921,8 +4412,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
     sfx('delete');
     final i = D.goals.indexOf(g);
     D.goals.remove(g);
+    _binAdd('goal', g, i);
     upd();
     undo('هدف حذف شد', () {
+      _binDrop('goal', g);
       D.goals.insert(i.clamp(0, D.goals.length), g);
       upd();
     });
@@ -2930,6 +4423,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   Future<void> goalSheet([Map? o]) async {
     final title = TextEditingController(text: o?['t'] ?? '');
+    final subs = <_Sub>[for (final x in (o?['subs'] as List? ?? [])) _Sub(x['t'], x['done'] == true)];
     var progress = (o?['progress'] as int? ?? 0).clamp(0, 100);
     var deadline = o != null && o['deadline'] != null
         ? DateTime.parse(o['deadline'])
@@ -2976,23 +4470,36 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   },
                 ),
                 const SizedBox(height: 8),
+                const Text('زیرمجموعه‌ها (با تیک زدنشون درصد پیشرفت خودکار حساب می‌شه)', style: TextStyle(fontSize: 12)),
+                for (var i = 0; i < subs.length; i++)
+                  Row(children: [
+                    Checkbox(value: subs[i].done, onChanged: (v) => set(() => subs[i].done = v == true)),
+                    Expanded(child: TextField(controller: subs[i].c, decoration: InputDecoration(hintText: 'زیرمجموعه ${i + 1}', isDense: true))),
+                    IconButton(icon: const Icon(Icons.close), onPressed: () => set(() => subs.removeAt(i))),
+                  ]),
+                Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton.icon(icon: const Icon(Icons.add), label: const Text('افزودن زیرمجموعه'), onPressed: () => set(() => subs.add(_Sub('', false))))),
                 Row(
                   children: [
                     const Icon(Icons.trending_up),
                     const SizedBox(width: 12),
                     const Text('درصد پیشرفت'),
                     const Spacer(),
-                    Text('$progress٪', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text('${subs.isEmpty ? progress.toInt() : subPct(subs)}٪', style: const TextStyle(fontWeight: FontWeight.bold)),
                   ],
                 ),
-                Slider(
-                  value: progress.toDouble(),
-                  min: 0,
-                  max: 100,
-                  divisions: 100,
-                  label: '$progress٪',
-                  onChanged: (v) => set(() => progress = v.round()),
-                ),
+                if (subs.isEmpty)
+                  Slider(
+                    value: progress.toDouble(),
+                    min: 0,
+                    max: 100,
+                    divisions: 100,
+                    label: '$progress٪',
+                    onChanged: (v) => set(() => progress = v.round()),
+                  )
+                else
+                  Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: LinearProgressIndicator(value: subPct(subs) / 100, minHeight: 8, borderRadius: BorderRadius.circular(8))),
                 const SizedBox(height: 8),
                 FilledButton.icon(
                   onPressed: () {
@@ -3016,9 +4523,15 @@ class _H extends State<Home> with WidgetsBindingObserver {
     };
     g['t'] = title.text.trim();
     g['deadline'] = ds(deadline);
+    final so = [
+      for (final x in subs)
+        if (x.c.text.trim().isNotEmpty) {'t': x.c.text.trim(), 'done': x.done}
+    ];
+    g['subs'] = so;
+    final np = so.isEmpty ? progress.toInt() : (so.where((e) => e['done'] == true).length * 100 / so.length).round();
     final prevProg = (g['progress'] as int?) ?? 0;
-    g['progress'] = progress;
-    if (progress >= 100 && prevProg < 100) Gm.goalDone(g);
+    g['progress'] = np;
+    if (np >= 100 && prevProg < 100) Gm.goalDone(g);
 
     if (o == null) {
       sfx('add');
@@ -3137,6 +4650,25 @@ class _H extends State<Home> with WidgetsBindingObserver {
                         Text(fd(g['deadline'] ?? '')),
                       ],
                     ),
+                    for (final x in ((g['subs'] as List?) ?? []).cast<Map>())
+                      CheckboxListTile(
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: EdgeInsets.zero,
+                        value: x['done'] == true,
+                        title: Text('${x['t']}', style: x['done'] == true ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
+                        onChanged: (v) async {
+                          x['done'] = v == true;
+                          final sl = ((g['subs'] as List)).cast<Map>();
+                          final np = (sl.where((e) => e['done'] == true).length * 100 / sl.length).round();
+                          final prev = (g['progress'] as int?) ?? 0;
+                          g['progress'] = np;
+                          if (v == true) sfx('done');
+                          if (np >= 100 && prev < 100) Gm.goalDone(g);
+                          await D.save();
+                          if (mounted) setState(() {});
+                        },
+                      ),
                   ],
                 ),
               ),
@@ -3151,8 +4683,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
     final i = D.tasks.indexOf(k);
     notif.cancel(taskNid(k['id'] as int));
     D.tasks.remove(k);
+    _binAdd('task', k, i);
     upd();
     undo('کار حذف شد', () {
+      _binDrop('task', k);
       D.tasks.insert(i.clamp(0, D.tasks.length), k);
       scheduleTask(k);
       upd();
@@ -3163,7 +4697,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
     final d = k['done'] == true;
     if (!d) sfx('done');
     k['done'] = !d;
-    if (!d) Gm.taskDone(k);
+    if (!d) {
+      Gm.taskDone(k);
+      repeatNext(k);
+    }
     k['doneAt'] = d ? null : ds(DateTime.now());
     if (d) {
       scheduleTask(k);
@@ -3184,6 +4721,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     final title = TextEditingController(text: o?['t'] ?? '');
     final subs = <_Sub>[for (final s in (o?['subs'] as List? ?? [])) _Sub(s['t'], s['done'] == true)];
     DateTime? rem = o?['r'] != null ? DateTime.parse(o!['r']) : null;
+    var rep = '${o?['rep'] ?? 'none'}';
     var saved = false;
     await showModalBottomSheet(
         context: context,
@@ -3232,6 +4770,11 @@ class _H extends State<Home> with WidgetsBindingObserver {
                         if (t == null) return;
                         set(() => rem = DateTime(d.year, d.month, d.day, t.hour, t.minute));
                       }),
+                  const Padding(padding: EdgeInsets.only(top: 6), child: Text('تکرار خودکار', style: TextStyle(fontSize: 12))),
+                  Wrap(spacing: 6, children: [
+                    for (final e in const {'none': 'بدون تکرار', 'daily': 'هر روز', 'weekly': 'هر هفته', 'monthly': 'هر ماه'}.entries)
+                      ChoiceChip(label: Text(e.value), selected: rep == e.key, onSelected: (_) => set(() => rep = e.key)),
+                  ]),
                   FilledButton(
                       onPressed: () {
                         if (title.text.trim().isEmpty) return;
@@ -3254,6 +4797,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       notif.cancel(taskNid(k['id'] as int));
     }
     k['t'] = title.text.trim();
+    k['rep'] = rep;
     k['subs'] = so;
     if (rem != null) {
       k['r'] = rem!.toIso8601String();
@@ -3292,6 +4836,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       final info = [
         if (k['r'] != null) '⏰ ${fd(k['r'])}  ${(k['r'] as String).length >= 16 ? (k['r'] as String).substring(11, 16) : ''}',
         if (subs.isNotEmpty) 'زیرمجموعه: $sd از ${subs.length}',
+        if (k['rep'] != null && k['rep'] != 'none') '🔁 ${const {'daily': 'روزانه', 'weekly': 'هفتگی', 'monthly': 'ماهانه'}[k['rep']] ?? ''}',
       ].join('   •   ');
       return Dismissible(
           key: ObjectKey(k),
@@ -3370,9 +4915,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
   void delEvent(Map e) {
     sfx('delete');
     notif.cancel(eventNid(e['id'] as int));
+    final ei = D.events.indexOf(e);
     D.events.remove(e);
+    _binAdd('event', e, ei);
     upd();
     undo('برنامه حذف شد', () {
+      _binDrop('event', e);
       D.events.add(e);
       schedule(e);
       upd();
@@ -3501,8 +5049,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
     sfx('delete');
     final i = D.txs.indexOf(x);
     D.txs.remove(x);
+    _binAdd('tx', x, i);
     upd();
     undo('حذف شد', () {
+      _binDrop('tx', x);
       D.txs.insert(i.clamp(0, D.txs.length), x);
       upd();
     });
@@ -3902,6 +5452,142 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 ]))));
   }
 
+  List<Map<String, dynamic>> _savList() {
+    try {
+      return [for (final e in (jsonDecode(prefs.getString('sav') ?? '[]') as List)) Map<String, dynamic>.from(e as Map)];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  void _savStore(List<Map<String, dynamic>> l) => prefs.setString('sav', jsonEncode(l));
+
+  Future<void> _addSav() async {
+    final t = await ask('عنوان هدف پس‌انداز (مثلاً سفر)');
+    if (t == null || t.trim().isEmpty || !mounted) return;
+    final a = await ask('مبلغ هدف (تومان)');
+    final amt = a == null ? null : parseAmt(a);
+    if (amt == null || amt <= 0) {
+      toast('مبلغ درست وارد نشد');
+      return;
+    }
+    final l = _savList()..add({'id': DateTime.now().microsecondsSinceEpoch, 't': t.trim(), 'target': amt, 'saved': 0});
+    _savStore(l);
+    setState(() {});
+  }
+
+  Widget savingsCard() {
+    final l = _savList();
+    return Card(
+        child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Row(children: [
+                const Icon(Icons.savings_outlined),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('هدف‌های پس‌انداز', style: TextStyle(fontWeight: FontWeight.bold))),
+                TextButton.icon(onPressed: _addSav, icon: const Icon(Icons.add), label: const Text('هدف جدید')),
+              ]),
+              if (l.isEmpty) const Text('مثلاً «سفر» با مبلغ هدف بساز و هر وقت پول کنار گذاشتی واریز کن.', style: TextStyle(fontSize: 12)),
+              for (final g in l)
+                Builder(builder: (_) {
+                  final tg = (g['target'] as num).toInt(), sv = (g['saved'] as num).toInt();
+                  return Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          Expanded(child: Text('${g['t']}${sv >= tg ? ' ✅' : ''}')),
+                          IconButton(
+                              tooltip: 'واریز',
+                              icon: const Icon(Icons.add_circle_outline),
+                              onPressed: () async {
+                                final a = await ask('مبلغ واریزی (تومان)');
+                                final amt = a == null ? null : parseAmt(a);
+                                if (amt == null || amt <= 0) return;
+                                g['saved'] = sv + amt;
+                                _savStore(l);
+                                if (sv < tg && sv + amt >= tg) {
+                                  Gm.coins += 100;
+                                  Gm.save();
+                                  Gm.say('🎯 به هدف پس‌انداز «${g['t']}» رسیدی!\nجایزه: ۱۰۰ سکه', true);
+                                }
+                                setState(() {});
+                              }),
+                          IconButton(
+                              tooltip: 'حذف',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () {
+                                l.remove(g);
+                                _savStore(l);
+                                setState(() {});
+                              }),
+                        ]),
+                        LinearProgressIndicator(value: tg == 0 ? 0 : (sv / tg).clamp(0.0, 1.0).toDouble(), minHeight: 8, borderRadius: BorderRadius.circular(8)),
+                        Text('${n(sv)} از ${n(tg)} تومان', style: const TextStyle(fontSize: 12)),
+                      ]));
+                }),
+            ])));
+  }
+
+  void smartBudget() {
+    final now = DateTime.now();
+    final totals = <String, int>{};
+    var months = 0;
+    for (var i = 1; i <= 3; i++) {
+      final sp = spentByCat(ds(_monthFirst(now, i)), ds(_monthFirst(now, i - 1)));
+      if (sp.isNotEmpty) months++;
+      sp.forEach((k, v) => totals[k] = (totals[k] ?? 0) + v);
+    }
+    if (months == 0) {
+      toast('برای پیشنهاد، حداقل یک ماه هزینه‌ی ثبت‌شده لازمه');
+      return;
+    }
+    final sug = {for (final e in totals.entries) e.key: ((e.value / months * 1.05) / 1000).round() * 1000};
+    showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('پیشنهاد بودجه‌ی ماهانه'),
+              content: SingleChildScrollView(
+                  child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('بر اساس میانگین ۳ ماه اخیر (۵٪ ارفاق):', style: TextStyle(fontSize: 12)),
+                const SizedBox(height: 6),
+                for (final e in sug.entries) Text('• ${e.key}: ${n(e.value)} تومان'),
+              ])),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('نه')),
+                FilledButton(
+                    onPressed: () {
+                      final cur = Map<String, dynamic>.from(budgets);
+                      sug.forEach((k, v) => cur[k] = v);
+                      prefs.setString('budgets', jsonEncode(cur));
+                      Navigator.pop(ctx);
+                      setState(() {});
+                      toast('بودجه‌ها اعمال شد');
+                    },
+                    child: const Text('اعمال')),
+              ],
+            ));
+  }
+
+  Future<void> shareReport() async {
+    final now = DateTime.now();
+    final first = _monthFirst(now, fMon), next = _monthFirst(now, fMon - 1);
+    final from = ds(first), to = ds(next);
+    final inc = sumR(from, to, true), exp = sumR(from, to, false);
+    final cats = spentByCat(from, to).entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final b = StringBuffer('📊 گزارش مالی ${monthLabel(first)}\n\nدرآمد: ${n(inc)} تومان\nهزینه: ${n(exp)} تومان\nمانده: ${n(inc - exp)} تومان\n\nهزینه‌ها به تفکیک دسته:\n');
+    for (final e in cats) {
+      b.writeln('• ${e.key}: ${n(e.value)}');
+    }
+    b.write('\n— Konj Planner');
+    try {
+      await shakeCh.invokeMethod('shareText', b.toString());
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: b.toString()));
+      toast('گزارش کپی شد');
+    }
+  }
+
   Widget money() {
     final cs = Theme.of(context).colorScheme;
     final now = DateTime.now();
@@ -4035,7 +5721,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
                             ]),
                           ]))),
               ]))),
+      Wrap(spacing: 8, children: [
+        OutlinedButton.icon(icon: const Icon(Icons.ios_share), label: const Text('گزارش متنی ماه'), onPressed: shareReport),
+        if (!inc) OutlinedButton.icon(icon: const Icon(Icons.auto_awesome), label: const Text('پیشنهاد بودجه'), onPressed: smartBudget),
+      ]),
       if (!inc && fMon == 0) budgetCard(),
+      if (!inc) savingsCard(),
       const SizedBox(height: 4),
       TextField(
           decoration: InputDecoration(
@@ -4296,9 +5987,17 @@ class _H extends State<Home> with WidgetsBindingObserver {
                           onPressed: () {
                             Navigator.pop(ctx);
                             sfx('delete');
+                            final hi = D.habits.indexOf(o);
                             D.habits.remove(o);
+                            _binAdd('habit', o, hi);
                             upd();
                             scheduleAll();
+                            undo('عادت حذف شد', () {
+                              _binDrop('habit', o);
+                              D.habits.insert(hi.clamp(0, D.habits.length).toInt(), o);
+                              upd();
+                              scheduleAll();
+                            });
                           },
                           child: const Text('حذف')),
                     const Spacer(),
@@ -4411,7 +6110,83 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 }),
           ])));
 
+  // اعلان کار جدید میز کار (وقتی برنامه در حال اجراست یا تازه به پس‌زمینه رفته)
+  Future<void> _pollWs() async {
+    if (!Sb.ok || !Sb.loggedIn || !(prefs.getBool('wsNotif') ?? true)) return;
+    try {
+      final r = Sb.rows(await Sb.req('GET', '/rest/v1/tasks', q: {'assignee': 'eq.${Sb.uid}', 'status': 'neq.done', 'select': 'id,title,workspace_id'}));
+      final old = prefs.getStringList('wsSeen');
+      final seen = (old ?? <String>[]).toSet();
+      if (old != null) {
+        for (final t in r) {
+          if (!seen.contains('${t['id']}')) {
+            notif.show(6000 + ('${t['id']}'.hashCode.abs() % 900), '📋 کار جدید در میز کار', '${t['title']}', nd);
+          }
+        }
+      }
+      await prefs.setStringList('wsSeen', [for (final t in r) '${t['id']}']);
+    } catch (_) {}
+  }
+
+  // ── تاریخچه‌ی روزها ──
+  void historyDays() {
+    final moods = readMoods(), rv = readReviews();
+    final days = {...moods.keys, ...rv.keys}.toList()..sort((a, b) => b.compareTo(a));
+    const faces = ['😞', '😕', '😐', '🙂', '😄'];
+    final now = DateTime.now();
+    final last14 = [for (var i = 13; i >= 0; i--) ds(DateTime(now.year, now.month, now.day - i))];
+    final week = last14.sublist(7);
+    final ms = [for (final d in week) if (moods[d] != null) ((moods[d]['m'] as int?) ?? 2)];
+    final avg = ms.isEmpty ? null : ms.reduce((a, b) => a + b) / ms.length;
+    final doneWeek = D.tasks.where((k) => k['done'] == true && week.contains(k['doneAt'])).length;
+    final revWeek = week.where((d) => rv[d] != null).length;
+    Navigator.of(context).push(MaterialPageRoute(
+        builder: (ctx) => Scaffold(
+            appBar: AppBar(title: const Text('تاریخچه‌ی روزها')),
+            body: ListView(padding: const EdgeInsets.all(12), children: [
+              Card(
+                  child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        const Text('هفته‌ی اخیر', style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 6),
+                        Text('${avg == null ? 'حال ثبت نشده' : 'میانگین حال: ${faces[avg.round().clamp(0, 4).toInt()]}'}   •   $doneWeek کار انجام‌شده   •   $revWeek بازبینی'),
+                        const SizedBox(height: 10),
+                        Row(children: [
+                          for (final d in last14)
+                            Expanded(child: Column(children: [Text(moods[d] == null ? '·' : faces[((moods[d]['m'] as int?) ?? 2).clamp(0, 4).toInt()], style: const TextStyle(fontSize: 16)), Text(d.substring(8), style: const TextStyle(fontSize: 9))]))
+                        ]),
+                      ]))),
+              if (days.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('هنوز چیزی ثبت نشده. از منوی بالا «بازبینی روز» یا «حال و خلاصه‌ی امروز» رو بزن.', textAlign: TextAlign.center)),
+              for (final d in days)
+                Builder(builder: (_) {
+                  final r = Map<String, dynamic>.from((rv[d] as Map?) ?? {});
+                  final m = moods[d] == null ? null : ((moods[d]['m'] as int?) ?? 2).clamp(0, 4).toInt();
+                  final note = '${moods[d]?['n'] ?? ''}'.trim();
+                  return Card(
+                      child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Row(children: [Text(m == null ? '📝' : faces[m], style: const TextStyle(fontSize: 22)), const SizedBox(width: 8), Text(fd(d), style: const TextStyle(fontWeight: FontWeight.bold))]),
+                            if (r['dt'] != null)
+                              Wrap(spacing: 6, children: [
+                                Chip(label: Text('✅ ${r['dt']} کار'), visualDensity: VisualDensity.compact),
+                                Chip(label: Text('🔥 ${r['hd']}/${r['ht']} عادت'), visualDensity: VisualDensity.compact),
+                                Chip(label: Text('🧠 ${r['fc']} دقیقه'), visualDensity: VisualDensity.compact),
+                                Chip(label: Text('💸 ${n(r['sp'] ?? 0)}'), visualDensity: VisualDensity.compact),
+                              ]),
+                            if (note.isNotEmpty) Text('یادداشت: $note'),
+                            if ('${r['g'] ?? ''}'.isNotEmpty) Text('👍 ${r['g']}'),
+                            if ('${r['i'] ?? ''}'.isNotEmpty) Text('🔧 ${r['i']}'),
+                            if ('${r['t'] ?? ''}'.isNotEmpty) Text('🎯 ${r['t']}'),
+                          ])));
+                }),
+            ]))));
+  }
+
   // ── بازبینی روز ──
+  void mnInc(String k, [int n = 1]) => Mn.inc(k, n);
+
   Map<String, dynamic> readReviews() {
     try {
       return Map<String, dynamic>.from(jsonDecode(prefs.getString('reviews') ?? '{}') as Map);
@@ -4427,6 +6202,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
     final good = TextEditingController(text: '${cur?['g'] ?? ''}');
     final imp = TextEditingController(text: '${cur?['i'] ?? ''}');
     final tom = TextEditingController(text: '${cur?['t'] ?? ''}');
+    final moods0 = readMoods();
+    var mood = (moods0[day]?['m'] as int?) ?? -1;
+    final note = TextEditingController(text: '${moods0[day]?['n'] ?? ''}');
+    const faces = ['😞', '😕', '😐', '🙂', '😄'];
     await showModalBottomSheet(
         context: context,
         isScrollControlled: true,
@@ -4444,7 +6223,26 @@ class _H extends State<Home> with WidgetsBindingObserver {
                       padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
                       child: SingleChildScrollView(
                           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-                        Text('بازبینی روز • ${fdl(now)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        Row(children: [
+                          Expanded(child: Text('امروزت چطور بود؟ • ${fdl(now)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+                          TextButton.icon(
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                historyDays();
+                              },
+                              icon: const Icon(Icons.history),
+                              label: const Text('تاریخچه')),
+                        ]),
+                        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                          for (var i = 0; i < 5; i++)
+                            GestureDetector(
+                                onTap: () => set(() => mood = i),
+                                child: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: BoxDecoration(shape: BoxShape.circle, color: mood == i ? Theme.of(ctx).colorScheme.primaryContainer : null),
+                                    child: Text(faces[i], style: const TextStyle(fontSize: 28)))),
+                        ]),
+                        TextField(controller: note, maxLines: 2, minLines: 1, decoration: const InputDecoration(labelText: 'یادداشت حال امروز (اختیاری)')),
                         const SizedBox(height: 8),
                         Wrap(spacing: 6, children: [
                           stat('✅', '$doneT کار انجام شد'),
@@ -4490,9 +6288,16 @@ class _H extends State<Home> with WidgetsBindingObserver {
                         const SizedBox(height: 12),
                         FilledButton(
                             onPressed: () {
-                              rv[day] = {'g': good.text.trim(), 'i': imp.text.trim(), 't': tom.text.trim()};
+                              rv[day] = {'g': good.text.trim(), 'i': imp.text.trim(), 't': tom.text.trim(), 'dt': doneT, 'hd': hDn, 'ht': D.habits.length, 'sp': spent, 'fc': foc};
                               prefs.setString('reviews', jsonEncode(rv));
+                              if (mood >= 0) {
+                                final mm = readMoods();
+                                mm[day] = {'m': mood, 'n': note.text.trim()};
+                                prefs.setString('moods', jsonEncode(mm));
+                                Gm.checkin(day);
+                              }
                               if (Gm.rw.add('rv:$day')) Gm.earn(10, 20, '+۱۰ سکه برای بازبینی روز 🪙');
+                              mnInc('review');
                               Navigator.pop(ctx);
                               toast('بازبینی ثبت شد');
                             },
@@ -4512,7 +6317,9 @@ class _H extends State<Home> with WidgetsBindingObserver {
   }
 
   // ── حال روز و خلاصه‌ی روز ──
-  Future<void> checkinDialog() async {
+  Future<void> checkinDialog() => reviewSheet();
+
+  Future<void> _oldCheckin() async {
     final now = DateTime.now(), day = ds(now);
     final moods = readMoods();
     var mood = (moods[day]?['m'] as int?) ?? -1;
@@ -4580,6 +6387,79 @@ class _H extends State<Home> with WidgetsBindingObserver {
   }
 
   // ── تمرکز ──
+  Widget _focusTip() {
+    Map fh = {};
+    try {
+      fh = jsonDecode(prefs.getString('fh') ?? '{}') as Map;
+    } catch (_) {}
+    if (fh.isEmpty) return const Card(child: ListTile(leading: Icon(Icons.lightbulb_outline), title: Text('ساعت طلایی تمرکز'), subtitle: Text('بعد از چند جلسه، پرتمرکزترین ساعتت رو پیدا می‌کنم.')));
+    var best = 0, bv = -1;
+    fh.forEach((k, v) {
+      if ((v as int) > bv) {
+        bv = v;
+        best = int.tryParse('$k') ?? 0;
+      }
+    });
+    final on = prefs.getInt('focusRem') ?? -1;
+    return Card(
+        child: ListTile(
+            leading: const Icon(Icons.lightbulb_outline),
+            title: Text('ساعت طلایی تو: ${best.toString().padLeft(2, '0')}:00'),
+            subtitle: Text(on >= 0 ? 'یادآوری روزانه ساعت $on:00 فعاله' : 'بیشترین تمرکزت همین ساعته. بزنم یادآوری؟'),
+            trailing: TextButton(
+                onPressed: () async {
+                  if (on >= 0) {
+                    await prefs.setInt('focusRem', -1);
+                  } else {
+                    await prefs.setInt('focusRem', best);
+                  }
+                  await scheduleFocusRem();
+                  if (mounted) setState(() {});
+                },
+                child: Text(on >= 0 ? 'خاموش' : 'یادآوری'))));
+  }
+
+  Future<void> _offerBreak() async {
+    if (!mounted || (prefs.getInt('fEnd') ?? 0) > 0) return;
+    var secs = 300;
+    var started = false;
+    Timer? tm;
+    await showDialog(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, set) => AlertDialog(
+                  title: const Text('☕ استراحت کوتاه'),
+                  content: Text(started ? 'استراحت: ${secs ~/ 60}:${(secs % 60).toString().padLeft(2, '0')}\nیه کم بکش و آب بخور!' : 'بعد از تمرکز، ۵ دقیقه استراحت بهتره. شروع کنم؟'),
+                  actions: [
+                    TextButton(
+                        onPressed: () {
+                          tm?.cancel();
+                          Navigator.pop(ctx);
+                        },
+                        child: Text(started ? 'بستن' : 'نه')),
+                    if (!started)
+                      FilledButton(
+                          onPressed: () {
+                            started = true;
+                            tm = Timer.periodic(const Duration(seconds: 1), (t) {
+                              secs--;
+                              if (secs <= 0) {
+                                t.cancel();
+                                sfx('happy');
+                                if (ctx.mounted) Navigator.pop(ctx);
+                                toast('استراحت تموم شد؛ آماده‌ی جلسه‌ی بعدی؟');
+                              } else if (ctx.mounted) {
+                                set(() {});
+                              }
+                            });
+                            set(() {});
+                          },
+                          child: const Text('شروع استراحت')),
+                  ],
+                )));
+    tm?.cancel();
+  }
+
   Widget focusTab() {
     final end = prefs.getInt('fEnd') ?? 0;
     final running = end > 0;
@@ -4610,7 +6490,17 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   const Text('مدت تمرکز', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Wrap(spacing: 8, children: [
-                    for (final m in [15, 25, 45, 60]) ChoiceChip(label: Text('$m دقیقه'), selected: fMin == m, onSelected: (_) => setState(() => fMin = m)),
+                    for (final m in [15, 25, 45, 60])
+                      ChoiceChip(
+                          label: Text(m == 60 && prefs.getString('f60') == ds(DateTime.now()) ? '۶۰ دقیقه (امروز استفاده شد)' : '$m دقیقه'),
+                          selected: fMin == m,
+                          onSelected: (_) {
+                            if (m == 60 && prefs.getString('f60') == ds(DateTime.now())) {
+                              toast('تمرکز ۶۰ دقیقه‌ای فقط روزی یک بار ممکنه');
+                              return;
+                            }
+                            setState(() => fMin = m);
+                          }),
                   ]),
                   const SizedBox(height: 12),
                   Text('جایزه: ${focusCoins(fMin)} سکه و $fMin تجربه برای قهرمانت 🪙'),
@@ -4619,6 +6509,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 ],
               ]))),
       Card(child: ListTile(leading: const Icon(Icons.timer_outlined), title: const Text('مجموع تمرکز'), subtitle: Text('${Gm.focusTotal ~/ 60} ساعت و ${Gm.focusTotal % 60} دقیقه'))),
+      if (!running) _focusTip(),
       const Padding(
           padding: EdgeInsets.all(8),
           child: Text('گوشی رو کنار بذار و فقط روی یک کار تمرکز کن. وقتی تایمر تموم شد اعلان می‌آد و سکه‌ها حساب می‌شن. اگه از برنامه بیرون بری، تایمر ادامه داره.',
@@ -4627,6 +6518,25 @@ class _H extends State<Home> with WidgetsBindingObserver {
   }
 
   // ── قهرمان ──
+  Future<void> _sellPet(Map h) async {
+    final price = petValue(h);
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: Text('فروش ${h['n']}؟'),
+              content: Text('پت برای همیشه فروخته می‌شه و ${n(price)} سکه می‌گیری.\nآیتم‌های پت توی کوله‌پشتی می‌مونن. قیمت با سطح و نادر بودن بیشتر می‌شه.'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('بفروش')),
+              ],
+            ));
+    if (ok != true) return;
+    Gm.sell(h);
+    sfx('add');
+    toast('پت فروخته شد: +${n(price)} سکه 🪙');
+    if (mounted) setState(() {});
+  }
+
   Future<void> playGame() async {
     if (Gm.heroes.isEmpty) return;
     final h = Gm.heroes[Gm.active];
@@ -4699,6 +6609,102 @@ class _H extends State<Home> with WidgetsBindingObserver {
             }));
   }
 
+  void missionSheet() {
+    Mn.load();
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
+              Widget row(Mission m, bool weekly) {
+                final p = math.min(Mn.prog(m, weekly), m.target);
+                final done = Mn.claimed(m, weekly);
+                return ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(m.text),
+                    subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const SizedBox(height: 4),
+                      LinearProgressIndicator(value: p / m.target, minHeight: 6, borderRadius: BorderRadius.circular(6)),
+                      Text('$p از ${m.target} • جایزه: ${m.reward} سکه', style: const TextStyle(fontSize: 12)),
+                    ]),
+                    trailing: done
+                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        : FilledButton.tonal(
+                            onPressed: Mn.ready(m, weekly)
+                                ? () {
+                                    Mn.claim(m, weekly);
+                                    sfx('done');
+                                    set(() {});
+                                    setState(() {});
+                                  }
+                                : null,
+                            child: const Text('دریافت')));
+              }
+
+              return SafeArea(
+                  child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        const Text('🎯 ماموریت‌های امروز', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        for (final m in Mn.today()) row(m, false),
+                        const Text('هر ۳ تا رو تموم کنی ۲۵ سکه‌ی ویژه می‌گیری', style: TextStyle(fontSize: 12)),
+                        const Divider(height: 24),
+                        const Text('📅 ماموریت‌های هفته', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        for (final m in weeklyList) row(m, true),
+                      ])));
+            }));
+  }
+
+  void albumSheet() {
+    const rl = ['معمولی', 'نادر 💎', 'افسانه‌ای 👑'];
+    final common = gAnimals.every((a) => Gm.album.contains('${a.id}|0'));
+    final rare = gAnimals.every((a) => Gm.album.contains('${a.id}|1'));
+    final legend = gAnimals.where((a) => Gm.album.contains('${a.id}|2')).length;
+    void claim(String key, int coins, String msg, {String? item}) {
+      if (!Gm.rw.add(key)) return;
+      Gm.coins += coins;
+      if (item != null) Gm.grant(item);
+      Gm.save();
+      Gm.say('🎁 $msg\n+$coins سکه', true);
+      setState(() {});
+    }
+
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => SafeArea(
+            child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                  const Text('📖 آلبوم پت‌ها', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const Text('هر گونه رو توی هر کیفیت که از تخم دربیاری ثبت می‌شه.', style: TextStyle(fontSize: 12)),
+                  const SizedBox(height: 8),
+                  for (final a in gAnimals)
+                    ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Text(a.emoji, style: const TextStyle(fontSize: 28)),
+                        title: Text(a.name),
+                        subtitle: Row(children: [for (var r = 0; r < 3; r++) Padding(padding: const EdgeInsetsDirectional.only(end: 10), child: Text('${Gm.album.contains('${a.id}|$r') ? '✅' : '🔒'} ${rl[r]}', style: const TextStyle(fontSize: 12)))])),
+                  const Divider(),
+                  ListTile(
+                      dense: true,
+                      title: const Text('هر ۶ گونه‌ی معمولی'),
+                      subtitle: const Text('۳۰۰ سکه + نشان آلبوم‌دار'),
+                      trailing: Gm.rw.contains('alb:c') ? const Icon(Icons.check_circle, color: Colors.green) : FilledButton.tonal(onPressed: common ? () { Navigator.pop(ctx); claim('alb:c', 300, 'آلبوم معمولی کامل شد!', item: 'sp_album'); } : null, child: const Text('دریافت'))),
+                  ListTile(
+                      dense: true,
+                      title: const Text('هر ۶ گونه‌ی نادر'),
+                      subtitle: const Text('۸۰۰ سکه'),
+                      trailing: Gm.rw.contains('alb:r') ? const Icon(Icons.check_circle, color: Colors.green) : FilledButton.tonal(onPressed: rare ? () { Navigator.pop(ctx); claim('alb:r', 800, 'آلبوم نادر کامل شد!'); } : null, child: const Text('دریافت'))),
+                  ListTile(
+                      dense: true,
+                      title: Text('پت افسانه‌ای ($legend از ${gAnimals.length})'),
+                      subtitle: const Text('۵۰۰ سکه برای اولین افسانه‌ای'),
+                      trailing: Gm.rw.contains('alb:l') ? const Icon(Icons.check_circle, color: Colors.green) : FilledButton.tonal(onPressed: legend > 0 ? () { Navigator.pop(ctx); claim('alb:l', 500, 'اولین پت افسانه‌ای!'); } : null, child: const Text('دریافت'))),
+                ]))));
+  }
+
   void _noCoins(int price) {
     sfx('delete');
     toast('سکه‌ی کافی نداری 🪙 ${price - Gm.coins} سکه‌ی دیگه لازمه؛ با کار، عادت و تمرکز سکه جمع کن');
@@ -4709,6 +6715,13 @@ class _H extends State<Home> with WidgetsBindingObserver {
     final cs = Theme.of(context).colorScheme;
     final kids = <Widget>[
       Card(child: ListTile(leading: const PxEmoji('🪙', 34), title: Text('${n(Gm.coins)} سکه'), subtitle: const Text('با انجام کارها، عادت‌ها و تمرکز سکه جمع کن'))),
+      Card(
+          child: ListTile(
+              leading: const Text('🎯', style: TextStyle(fontSize: 28)),
+              title: const Text('ماموریت‌ها'),
+              subtitle: Text(Mn.readyCount() > 0 ? '${Mn.readyCount()} ماموریت آماده‌ی دریافت جایزه است!' : 'روزانه و هفتگی؛ انجامشون بده و سکه بگیر'),
+              trailing: const Icon(Icons.chevron_left),
+              onTap: missionSheet)),
     ];
     if (h == null) {
       kids.add(Card(
@@ -4751,6 +6764,19 @@ class _H extends State<Home> with WidgetsBindingObserver {
         kids.add(Padding(
             padding: const EdgeInsets.only(top: 8),
             child: OutlinedButton.icon(icon: const Icon(Icons.sports_esports), label: Text(plays >= 2 ? 'مینی‌بازی: سهم امروز تموم شد 🌙' : 'مینی‌بازی گرفتن غذا (${2 - plays} بار مونده امروز)'), onPressed: plays >= 2 ? null : playGame)));
+        final mp = prefs.getInt('mm:${ds(DateTime.now())}') ?? 0;
+        kids.add(Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: OutlinedButton.icon(
+                icon: const Icon(Icons.grid_view),
+                label: Text(mp >= 2 ? 'بازی حافظه: سهم امروز تموم شد 🌙' : 'بازی حافظه (${2 - mp} بار مونده امروز)'),
+                onPressed: mp >= 2
+                    ? null
+                    : () async {
+                        await Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => const MemoryGame()));
+                        if (mounted) setState(() {});
+                      })));
+        kids.add(Padding(padding: const EdgeInsets.only(top: 6), child: OutlinedButton.icon(icon: const Icon(Icons.collections_bookmark_outlined), label: Text('آلبوم پت‌ها (${Gm.album.length} از ${gAnimals.length * 3})'), onPressed: albumSheet)));
       }
       kids.add(Card(
           child: Padding(
@@ -4787,9 +6813,11 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   if (stageOf(lv) < 4) Text('تا مرحله‌ی «${stageNames[stageOf(lv) + 1]}»: سطح ${const [5, 10, 18, 30][stageOf(lv)]}', style: TextStyle(fontSize: 12, color: cs.outline)),
                 ],
                 if (Gm.pool > 0) Text('${Gm.pool} تجربه برای بعد از باز شدن تخم ذخیره شده', style: const TextStyle(fontSize: 12)),
+                const SizedBox(height: 6),
+                OutlinedButton.icon(onPressed: () => _sellPet(h), icon: const Icon(Icons.sell_outlined), label: Text('فروش پت (${n(petValue(h))} سکه)')),
               ]))));
       kids.add(SegmentedButton<int>(
-          segments: const [ButtonSegment(value: 0, label: Text('فروشگاه')), ButtonSegment(value: 1, label: Text('کوله‌پشتی')), ButtonSegment(value: 2, label: Text('جوایز'))],
+          segments: const [ButtonSegment(value: 0, label: Text('فروشگاه')), ButtonSegment(value: 1, label: Text('کوله')), ButtonSegment(value: 3, label: Text('رنگ')), ButtonSegment(value: 2, label: Text('جوایز'))],
           selected: {hv},
           onSelectionChanged: (v) => setState(() => hv = v.first)));
       kids.add(const SizedBox(height: 8));
@@ -4797,14 +6825,14 @@ class _H extends State<Home> with WidgetsBindingObserver {
       if (hv == 0) {
         for (final slot in slotNames.keys) {
           kids.add(head(slotNames[slot]!));
-          for (final it in gItems.where((i) => i.slot == slot && i.price > 0)) {
+          for (final it in gItems.where((i) => i.slot == slot && i.price > 0 && (!i.id.startsWith('sf_') || i.id == weeklySpecialId()))) {
             final owned = Gm.inv[it.id] ?? 0;
             final lovedBy = it.love.isEmpty ? null : gAnimals.where((a) => a.love == it.love).firstOrNull?.name;
             kids.add(ListTile(
                 dense: true,
                 leading: PxEmoji(it.emoji, 38),
                 title: Text(it.name),
-                subtitle: slot == 'food' ? Text('+${it.xp} تجربه${lovedBy != null ? ' • محبوب $lovedBy' : ''} • دارید: $owned') : null,
+                subtitle: slot == 'food' ? Text('+${it.xp} تجربه • 🍖 +${foodSat(it)} سیری${lovedBy != null ? ' • محبوب $lovedBy' : ''} • دارید: $owned${it.id.startsWith('sf_') ? ' • ⏳ ویژه‌ی این هفته' : ''}') : null,
                 trailing: slot != 'food' && owned > 0
                     ? const Text('✓ داری')
                     : FilledButton.tonal(
@@ -4871,7 +6899,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
               dense: true,
               leading: PxEmoji(it.emoji, 38),
               title: Text('${it.name} × ${Gm.inv[it.id]}'),
-              subtitle: Text(loved ? '+${(it.xp * 1.5).round()} تجربه (محبوبشه 😍)' : '+${it.xp} تجربه'),
+              subtitle: Text('${loved ? '+${(it.xp * 1.5).round()} تجربه (محبوبشه 😍)' : '+${it.xp} تجربه'} • 🍖 +${foodSat(it)} سیری'),
               trailing: FilledButton.tonal(
                   onPressed: () {
                     if (!hatched) {
@@ -4886,7 +6914,42 @@ class _H extends State<Home> with WidgetsBindingObserver {
                       if (mounted) setState(() {});
                     });
                   },
-                  child: const Text('بخوراند'))));
+                  child: const Text('غذا دادن'))));
+        }
+      } else if (hv == 3) {
+        kids.add(const Padding(padding: EdgeInsets.all(4), child: Text('رنگ پت رو با سکه عوض کن. رنگ‌هایی که خریدی همیشه برای همین پت می‌مونن و می‌تونی بینشون جابه‌جا بشی.', style: TextStyle(fontSize: 12))));
+        final cur = (h['col'] as int?) ?? 0;
+        for (var i = 0; i < petColors.length; i++) {
+          final c = petColors[i];
+          final owned = Gm.ownsColor(h, i);
+          final sw = i == 0 ? _palFor('${h['a']}', (h['rar'] as int?) ?? 0)[0] : c.pal[0];
+          kids.add(ListTile(
+              dense: true,
+              leading: Container(width: 34, height: 34, decoration: BoxDecoration(shape: BoxShape.circle, color: Color(sw), border: Border.all(color: Colors.black26, width: 2))),
+              title: Text(c.name),
+              subtitle: Text(owned ? (cur == i ? 'فعال' : 'داری') : '${c.price} سکه'),
+              trailing: cur == i
+                  ? const Icon(Icons.check_circle, color: Colors.green)
+                  : FilledButton.tonal(
+                      onPressed: () {
+                        if (!hatched) {
+                          toast('اول تخم رو باز کن 🥚');
+                          return;
+                        }
+                        if (owned) {
+                          Gm.setColor(h, i);
+                        } else {
+                          if (Gm.coins < c.price) {
+                            _noCoins(c.price);
+                            return;
+                          }
+                          Gm.buyColor(h, i);
+                          sfx('add');
+                        }
+                        setState(() {});
+                        stageKey.currentState?.react();
+                      },
+                      child: Text(owned ? 'انتخاب' : '${c.price} 🪙'))));
         }
       } else {
         kids.add(const Padding(padding: EdgeInsets.all(4), child: Text('این آیتم‌ها فروخته نمی‌شن؛ فقط با دستاورد باز می‌شن.', style: TextStyle(fontSize: 12))));
@@ -4917,18 +6980,32 @@ class _H extends State<Home> with WidgetsBindingObserver {
         child: Scaffold(
           appBar: AppBar(title: Text(['کارها', 'تقویم', 'اهداف و عادت‌ها', 'مالی', 'تمرکز', 'پت من'][tab]), actions: [
             TextButton(onPressed: locked ? lockMsg : () => setState(() => tab = 5), child: Text('🪙 ${n(Gm.coins)}')),
+            IconButton(
+                tooltip: 'امروزت چطور بود؟ (حال و بازبینی روز)',
+                onPressed: locked ? lockMsg : reviewSheet,
+                icon: Badge(
+                    isLabelVisible: readMoods()[ds(DateTime.now())] == null && DateTime.now().hour >= 18,
+                    smallSize: 9,
+                    child: Text(() {
+                      final m = readMoods()[ds(DateTime.now())];
+                      return m == null ? '📔' : const ['😞', '😕', '😐', '🙂', '😄'][((m['m'] as int?) ?? 2).clamp(0, 4).toInt()];
+                    }(), style: const TextStyle(fontSize: 22)))),
             PopupMenuButton<String>(
-                icon: const Icon(Icons.event_note),
-                tooltip: 'حال و بازبینی روز',
+                icon: const Icon(Icons.more_vert),
+                tooltip: 'بیشتر',
                 enabled: !locked,
                 onSelected: (v) {
-                  if (v == 'mood') checkinDialog();
-                  if (v == 'review') reviewSheet();
+                  if (v == 'bin') binSheet();
                   if (v == 'help') openGuide();
+                  if (v == 'hist') historyDays();
+                  if (v == 'work') Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WorkPage()));
+                  if (v == 'upd') _checkUpdate(manual: true);
                 },
                 itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'mood', child: Text('حال و خلاصه‌ی امروز')),
-                      PopupMenuItem(value: 'review', child: Text('بازبینی روز')),
+                      PopupMenuItem(value: 'bin', child: Text('سطل بازیافت 🗑️')),
+                      PopupMenuItem(value: 'hist', child: Text('تاریخچه‌ی روزها')),
+                      PopupMenuItem(value: 'work', child: Text('میز کار')),
+                      PopupMenuItem(value: 'upd', child: Text('بررسی بروزرسانی')),
                       PopupMenuItem(value: 'help', child: Text('راهنما')),
                     ]),
             IconButton(icon: const Icon(Icons.settings), tooltip: 'تنظیمات', onPressed: locked ? lockMsg : settings),
