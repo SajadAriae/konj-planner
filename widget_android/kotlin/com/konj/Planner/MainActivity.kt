@@ -28,6 +28,29 @@ class MainActivity : FlutterActivity() {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
                     result.success(true)
                 }
+                "shareText" -> {
+                    try {
+                        val i = Intent(Intent.ACTION_SEND)
+                        i.type = "text/plain"
+                        i.putExtra(Intent.EXTRA_TEXT, call.arguments as String)
+                        val c = Intent.createChooser(i, null)
+                        c.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(c)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+                "openUrl" -> {
+                    try {
+                        val i = Intent(Intent.ACTION_VIEW, Uri.parse(call.arguments as String))
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(i)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
                 "keepOn" -> {
                     val on = call.arguments as? Boolean ?: false
                     runOnUiThread {
