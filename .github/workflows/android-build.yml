@@ -10,10 +10,15 @@ jobs:
   build:
     name: Build Konj Planner APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Compute build number
+        run: echo "BUILD=$((GITHUB_RUN_NUMBER + 100))" >> $GITHUB_ENV
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -61,12 +66,15 @@ jobs:
           }
 
           put KonjPlannerWidgetProvider.kt $K
+          put KonjPetWidgetProvider.kt $K
           put KonjWidgetService.kt $K
           put ShakeService.kt $K
           put MainActivity.kt $K
           put konj_planner_widget.xml $R/layout
           put konj_widget_item.xml $R/layout
           put konj_planner_widget_info.xml $R/xml
+          put konj_pet_widget.xml $R/layout
+          put konj_pet_widget_info.xml $R/xml
           put konj_widget_bg.xml $R/drawable
 
           # Use the repository logo as the launcher icon when available.
@@ -197,21 +205,27 @@ jobs:
           import re
           manifest = Path("android/app/src/main/AndroidManifest.xml")
           m = manifest.read_text(encoding="utf-8")
-          perms = ["FOREGROUND_SERVICE", "FOREGROUND_SERVICE_SPECIAL_USE", "SYSTEM_ALERT_WINDOW", "USE_FULL_SCREEN_INTENT"]
+          perms = ["FOREGROUND_SERVICE", "FOREGROUND_SERVICE_SPECIAL_USE", "SYSTEM_ALERT_WINDOW", "USE_FULL_SCREEN_INTENT", "INTERNET"]
           add = ''.join('\n    <uses-permission android:name="android.permission.%s"/>' % p for p in perms if p not in m)
           if add:
               m = re.sub(r'(<manifest[^>]*>)', lambda x: x.group(1) + add, m, count=1)
           comps = (
+              '\n        <receiver android:name=".KonjPetWidgetProvider" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/konj_pet_widget_info" /></receiver>'
               '\n        <service android:name=".KonjWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS" android:exported="false" />'
               '\n        <service android:name=".ShakeService" android:exported="false" android:foregroundServiceType="specialUse">'
               '\n            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="shake_to_open_app" />'
               '\n        </service>'
           )
-          if "ShakeService" not in m:
+          if "KonjPetWidgetProvider" not in m or "ShakeService" not in m:
               m = m.replace("    </application>", comps + "\n    </application>", 1)
           manifest.write_text(m, encoding="utf-8")
           print(m)
           PY
+
+      - name: Write repository name for update checker
+        run: |
+          mkdir -p assets
+          echo "${{ github.repository }}" > assets/repo.txt
 
       - name: Flutter Pub Get
         run: flutter pub get
@@ -277,7 +291,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          flutter build apk --release --build-number=$((GITHUB_RUN_NUMBER + 100))
+          flutter build apk --release --build-number=$BUILD --dart-define=BUILD=$BUILD
 
       - name: Prepare APK
         run: |
@@ -291,3 +305,16 @@ jobs:
           name: Konj-Planner-APK
           path: release/Konj-Planner.apk
           if-no-files-found: error
+
+      - name: Prepare release notes
+        run: |
+          [ -f RELEASE_NOTES.md ] || echo "بروزرسانی جدید Konj Planner" > RELEASE_NOTES.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: b${{ env.BUILD }}
+          name: Konj Planner b${{ env.BUILD }}
+          body_path: RELEASE_NOTES.md
+          files: release/Konj-Planner.apk
+          make_latest: true
