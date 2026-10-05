@@ -15,7 +15,7 @@ import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
 
 // ───────────────────────── تنظیمات و ثابت‌ها ─────────────────────────
-const kVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
+const kDataVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
 final notif = FlutterLocalNotificationsPlugin();
 late SharedPreferences prefs;
 final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/حالت تیره) زیاد می‌شود
@@ -3094,7 +3094,7 @@ class D {
       g['progress'] ??= 0;
       g['deadline'] ??= ds(DateTime.now());
     }
-    prefs.setInt('ver', kVer);
+    prefs.setInt('ver', kDataVer);
   }
 
   static Future<void> save() async {
@@ -3108,7 +3108,7 @@ class D {
 
   static String backup() => jsonEncode({
         'app': 'Konj Planner',
-        'ver': kVer,
+        'ver': kDataVer,
         'tasks': tasks,
         'events': events,
         'txs': txs,
