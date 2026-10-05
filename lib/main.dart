@@ -1782,9 +1782,35 @@ class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMix
 class Sb {
   static String url = '', key = '', token = '', refresh = '', uid = '', name = '', email = '';
 
+  // آدرس پروژه را به شکل درست https://xxxx.supabase.co درمی‌آورد؛
+  // اگر کاربر آدرس /rest/v1، /auth/v1 یا لینک داشبورد را چسبانده باشد هم درست می‌شود.
+  static String normUrl(String raw) {
+    var u = raw.replaceAll(RegExp(r'[\s\u200b-\u200f\u202a-\u202e\ufeff]'), '');
+    if (u.isEmpty) return '';
+    if (!u.contains('://')) {
+      u = u.contains('.') ? 'https://$u' : 'https://$u.supabase.co';
+    }
+    try {
+      final p = Uri.parse(u);
+      var host = p.host;
+      if (host == 'supabase.com' || host == 'app.supabase.com' || host == 'www.supabase.com') {
+        final m = RegExp(r'/project/([a-z0-9]+)').firstMatch(p.path);
+        if (m == null) return '';
+        host = '${m.group(1)}.supabase.co';
+        return 'https://$host';
+      }
+      if (host.isEmpty) return '';
+      return '${p.scheme == 'http' ? 'http' : 'https'}://$host${p.hasPort && p.port != 443 && p.port != 80 ? ':${p.port}' : ''}';
+    } catch (_) {
+      return u;
+    }
+  }
+
+  static String normKey(String raw) => raw.replaceAll(RegExp(r'\s'), '').replaceFirst(RegExp(r'^[Bb]earer'), '');
+
   static void load() {
-    url = prefs.getString('sbUrl') ?? '';
-    key = prefs.getString('sbKey') ?? '';
+    url = normUrl(prefs.getString('sbUrl') ?? '');
+    key = normKey(prefs.getString('sbKey') ?? '');
     token = prefs.getString('sbTok') ?? '';
     refresh = prefs.getString('sbRef') ?? '';
     uid = prefs.getString('sbUid') ?? '';
@@ -1796,8 +1822,8 @@ class Sb {
   static bool get loggedIn => token.isNotEmpty && uid.isNotEmpty;
 
   static Future<void> saveCfg(String u, String k) async {
-    url = u.trim();
-    key = k.trim();
+    url = normUrl(u);
+    key = normKey(k);
     await prefs.setString('sbUrl', url);
     await prefs.setString('sbKey', key);
   }
@@ -1854,7 +1880,7 @@ class Sb {
   static Future<dynamic> req(String method, String path, {Object? body, Map<String, String>? q, bool auth = true, bool retry = true, Map<String, String>? headers}) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
-      final base = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+      final base = normUrl(url);
       final uri = Uri.parse('$base$path').replace(queryParameters: q);
       final r = await client.openUrl(method, uri);
       r.headers.set('apikey', key);
@@ -1873,6 +1899,9 @@ class Sb {
           final j = jsonDecode(text);
           msg = '${j['message'] ?? j['msg'] ?? j['error_description'] ?? j['error'] ?? text}';
         } catch (_) {}
+        if (msg.contains('Invalid path specified')) {
+          msg = 'آدرس پروژه اشتباهه. باید دقیقاً به شکل https://xxxx.supabase.co باشه (بدون /rest/v1 و بدون لینک داشبورد). از دکمه‌ی اتصال بالای صفحه اصلاحش کن.';
+        }
         throw Exception(msg);
       }
       return text.isEmpty ? null : jsonDecode(text);
@@ -1955,8 +1984,18 @@ class _WorkPageState extends State<WorkPage> {
         FilledButton(
             onPressed: () async {
               if (url.text.trim().isEmpty || key.text.trim().isEmpty) return;
+              final nu = Sb.normUrl(url.text);
+              if (!RegExp(r'^https?://[^/]+\.[^/]+').hasMatch(nu)) {
+                setState(() => err = 'آدرس پروژه معتبر نیست؛ مثل https://xxxx.supabase.co');
+                return;
+              }
               await Sb.saveCfg(url.text, key.text);
-              setState(() => editCfg = false);
+              url.text = Sb.url;
+              key.text = Sb.key;
+              setState(() {
+                editCfg = false;
+                err = '';
+              });
             },
             child: const Text('ذخیره‌ی اتصال')),
       ]);
