@@ -15,7 +15,7 @@ import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
 
 // ───────────────────────── تنظیمات و ثابت‌ها ─────────────────────────
-const kDataVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
+const kVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
 final notif = FlutterLocalNotificationsPlugin();
 late SharedPreferences prefs;
 final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/حالت تیره) زیاد می‌شود
@@ -707,20 +707,9 @@ Future<ui.Image> _mkPixelEmoji(String e, int g) async {
         col[i] = _rgb2(q(src[i * 4]), q(src[i * 4 + 1]), q(src[i * 4 + 2]));
       }
     }
-    for (var d = 3; d >= 1; d--) {
-      for (var y = 0; y < g; y++) {
-        for (var x = 0; x < g; x++) {
-          if (mask[y * g + x]) out.set(x + 1 + d, y + 1 + d, _shade(col[y * g + x], d == 3 ? .42 : (d == 2 ? .5 : .58)));
-        }
-      }
-    }
     for (var y = 0; y < g; y++) {
       for (var x = 0; x < g; x++) {
-        if (!mask[y * g + x]) continue;
-        var c = col[y * g + x];
-        final up = y > 0 && mask[(y - 1) * g + x], left = x > 0 && mask[y * g + x - 1];
-        if (!up || !left) c = _shade(c, 1.22);
-        out.set(x + 1, y + 1, c);
+        if (mask[y * g + x]) out.set(x + 1, y + 1, col[y * g + x]);
       }
     }
   }
@@ -1153,7 +1142,7 @@ class ScenePainter extends CustomPainter {
       box(0, gy, s.width, u * .9, b);
     }
 
-    switch (scene) {
+    switch (scene.replaceFirst('bg_', '')) {
       case 'cave':
         sky(const Color(0xFF1B1626), const Color(0xFF3A2D4A));
         for (var i = 0; i < 9; i++) {
@@ -1259,7 +1248,7 @@ class PetStage extends StatefulWidget {
   State<PetStage> createState() => PetStageState();
 }
 
-class PetStageState extends State<PetStage> with TickerProviderStateMixin {
+class PetStageState extends State<PetStage> with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   static final Map<String, int> _taps = {};
   late final AnimationController _idle, _act, _wob, _hatch;
   GItem? _food;
@@ -1267,6 +1256,8 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
   bool busy = false, _eaten = false;
   int _bite = 0;
   Timer? _love;
+  @override
+  bool get wantKeepAlive => true;
 
   @override
   void initState() {
@@ -1393,6 +1384,7 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final h = widget.hero;
     if (h['hatched'] == false) return _eggView(h);
     return _wrap(RepaintBoundary(child: AnimatedBuilder(
@@ -1528,6 +1520,90 @@ class PetStageState extends State<PetStage> with TickerProviderStateMixin {
                 }),
             hint: _hatch.isAnimating ? null : '🥚 روی تخم بزن! (${(3 - tp).clamp(0, 3)} ضربه‌ی دیگه)'));
   }
+}
+
+class FocusDial extends StatelessWidget {
+  final int minutes, leftSec;
+  final bool running;
+  final void Function(int) onChange;
+  const FocusDial({super.key, required this.minutes, required this.leftSec, required this.running, required this.onChange});
+  static const double S = 240;
+
+  int _fromPos(Offset p) {
+    final d = p - const Offset(S / 2, S / 2);
+    var a = math.atan2(d.dx, -d.dy);
+    if (a < 0) a += math.pi * 2;
+    var m = (a / (math.pi * 2) * 60 / 5).round() * 5;
+    if (m >= 60) m = 60;
+    if (m < 10) m = (minutes > 30 || a > math.pi * 1.8) ? 60 : 10;
+    return m < 10 ? 10 : (m > 60 ? 60 : m);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    String mmss(int x) => '${(x ~/ 60).toString().padLeft(2, '0')}:${(x % 60).toString().padLeft(2, '0')}';
+    return SizedBox(
+        width: S,
+        height: S,
+        child: GestureDetector(
+            onPanStart: running ? null : (d) => onChange(_fromPos(d.localPosition)),
+            onPanUpdate: running ? null : (d) => onChange(_fromPos(d.localPosition)),
+            onTapDown: running ? null : (d) => onChange(_fromPos(d.localPosition)),
+            child: CustomPaint(
+                painter: _DialPainter(running ? leftSec / 3600 : minutes / 60, cs.primary, cs.outlineVariant, cs.onSurface, running),
+                child: Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(running ? mmss(leftSec) : '$minutes', style: TextStyle(fontSize: running ? 40 : 54, fontWeight: FontWeight.bold, color: cs.onSurface)),
+                  Text(running ? 'مانده' : 'دقیقه', style: TextStyle(color: cs.outline)),
+                ])))));
+  }
+}
+
+class _DialPainter extends CustomPainter {
+  final double frac;
+  final Color primary, track, text;
+  final bool running;
+  _DialPainter(this.frac, this.primary, this.track, this.text, this.running);
+  @override
+  void paint(Canvas canvas, Size s) {
+    final c = Offset(s.width / 2, s.height / 2);
+    final r = s.width / 2 - 22;
+    final ring = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 16
+      ..strokeCap = StrokeCap.round;
+    ring.color = track;
+    canvas.drawCircle(c, r, ring);
+    ring.color = primary;
+    canvas.drawArc(Rect.fromCircle(center: c, radius: r), -math.pi / 2, math.pi * 2 * frac.clamp(0.0, 1.0), false, ring);
+    final tk = Paint()
+      ..color = text.withOpacity(.35)
+      ..strokeWidth = 2;
+    for (var m = 0; m < 60; m += 5) {
+      final a = -math.pi / 2 + m / 60 * math.pi * 2;
+      final r1 = r + 14, r2 = r + (m % 10 == 0 ? 22 : 18);
+      canvas.drawLine(c + Offset(math.cos(a) * r1, math.sin(a) * r1), c + Offset(math.cos(a) * r2, math.sin(a) * r2), tk);
+    }
+    for (var m = 10; m <= 60; m += 10) {
+      final a = -math.pi / 2 + m / 60 * math.pi * 2;
+      final tp = TextPainter(text: TextSpan(text: '$m', style: TextStyle(color: text.withOpacity(.6), fontSize: 11)), textDirection: TextDirection.ltr)..layout();
+      final p = c + Offset(math.cos(a) * (r - 24), math.sin(a) * (r - 24));
+      tp.paint(canvas, p - Offset(tp.width / 2, tp.height / 2));
+    }
+    if (!running) {
+      final a = -math.pi / 2 + math.pi * 2 * frac;
+      final k = c + Offset(math.cos(a) * r, math.sin(a) * r);
+      canvas.drawCircle(k, 13, Paint()..color = Colors.white);
+      canvas.drawCircle(k, 13, Paint()
+        ..color = primary
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DialPainter o) => o.frac != frac || o.running != running || o.primary != primary;
 }
 
 class FocusPet extends StatefulWidget {
@@ -1779,38 +1855,52 @@ class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMix
 }
 
 // ───────────────────────── میز کار آنلاین (Supabase) ─────────────────────────
+String cleanText(String s) => s.replaceAll(RegExp(r'[\u200B-\u200F\u202A-\u202E\u2060\uFEFF\u00A0]'), ' ').trim();
+
+String cleanKey(String s) {
+  var k = s.replaceAll(RegExp(r'[\s\u200B-\u200F\u202A-\u202E\u2060\uFEFF\u00A0"\x27]'), '');
+  if (k.toLowerCase().startsWith('bearer')) k = k.substring(6);
+  return k;
+}
+
+String cleanUrl(String s) {
+  var u = cleanKey(s);
+  if (u.isEmpty) return u;
+  if (!u.toLowerCase().startsWith('http')) u = 'https://$u';
+  u = u.replaceFirst(RegExp(r'/(rest|auth)/v1.*$'), '');
+  return u.replaceAll(RegExp(r'/+$'), '');
+}
+
+String cleanEmail(String s) => cleanKey(s).toLowerCase();
+
+String faErr(Object e) {
+  final m = '$e'.replaceFirst('Exception: ', '');
+  final l = m.toLowerCase();
+  if (l.contains('email logins are disabled') || l.contains('email_provider_disabled') || l.contains('provider is not enabled')) {
+    return 'ورود با ایمیل توی Supabase خاموشه.\nداشبورد Supabase ← Authentication ← Sign In / Providers ← Email رو باز کن، «Enable Email provider» رو روشن کن و Save بزن.';
+  }
+  if (l.contains('signups not allowed') || l.contains('signup is disabled') || l.contains('signups are disabled')) {
+    return 'ثبت‌نام کاربر جدید توی Supabase بسته‌ست. Authentication ← Sign In / Providers (یا Settings) ← «Allow new users to sign up» رو روشن کن.';
+  }
+  if (l.contains('invalid login credentials')) return 'ایمیل یا رمز اشتباهه (اگه هنوز حساب نداری اول «ثبت‌نام» رو بزن).';
+  if (l.contains('email not confirmed')) return 'تأیید ایمیل توی Supabase فعاله. Authentication ← Providers ← Email ← «Confirm email» رو خاموش کن.';
+  if (l.contains('already registered') || l.contains('already been registered')) return 'این ایمیل قبلاً ثبت‌نام کرده؛ «ورود» رو بزن.';
+  if (l.contains('password should be at least') || l.contains('weak_password')) return 'رمز باید حداقل ۶ حرف باشه.';
+  if (l.contains('invalid api key') || l.contains('invalid jwt') || l.contains('no api key') || l.contains('apikey')) return 'کلید (anon key) اشتباهه. دوباره از Project Settings ← API Keys کپی کن.';
+  if (l.contains('invalid path') || l.contains('404')) return 'آدرس پروژه اشتباهه. باید شبیه https://xxxx.supabase.co باشه.';
+  if (l.contains('socketexception') || l.contains('failed host lookup') || l.contains('timeoutexception') || l.contains('handshake') || l.contains('connection')) return 'اتصال برقرار نشد؛ اینترنت یا آدرس پروژه رو چک کن (ممکنه به VPN نیاز باشه).';
+  if (l.contains('formatexception')) return 'پاسخ سرور قابل خواندن نبود؛ آدرس پروژه رو چک کن.';
+  if (l.contains('does not exist') && l.contains('relation')) return 'جدول‌ها ساخته نشدن؛ فایل supabase_setup.sql رو توی SQL Editor اجرا کن.';
+  if (l.contains('could not find the function')) return 'تابع‌های دیتابیس ساخته نشدن؛ فایل supabase_setup.sql رو اجرا کن.';
+  return m;
+}
+
 class Sb {
   static String url = '', key = '', token = '', refresh = '', uid = '', name = '', email = '';
 
-  // آدرس پروژه را به شکل درست https://xxxx.supabase.co درمی‌آورد؛
-  // اگر کاربر آدرس /rest/v1، /auth/v1 یا لینک داشبورد را چسبانده باشد هم درست می‌شود.
-  static String normUrl(String raw) {
-    var u = raw.replaceAll(RegExp(r'[\s\u200b-\u200f\u202a-\u202e\ufeff]'), '');
-    if (u.isEmpty) return '';
-    if (!u.contains('://')) {
-      u = u.contains('.') ? 'https://$u' : 'https://$u.supabase.co';
-    }
-    try {
-      final p = Uri.parse(u);
-      var host = p.host;
-      if (host == 'supabase.com' || host == 'app.supabase.com' || host == 'www.supabase.com') {
-        final m = RegExp(r'/project/([a-z0-9]+)').firstMatch(p.path);
-        if (m == null) return '';
-        host = '${m.group(1)}.supabase.co';
-        return 'https://$host';
-      }
-      if (host.isEmpty) return '';
-      return '${p.scheme == 'http' ? 'http' : 'https'}://$host${p.hasPort && p.port != 443 && p.port != 80 ? ':${p.port}' : ''}';
-    } catch (_) {
-      return u;
-    }
-  }
-
-  static String normKey(String raw) => raw.replaceAll(RegExp(r'\s'), '').replaceFirst(RegExp(r'^[Bb]earer'), '');
-
   static void load() {
-    url = normUrl(prefs.getString('sbUrl') ?? '');
-    key = normKey(prefs.getString('sbKey') ?? '');
+    url = cleanUrl(prefs.getString('sbUrl') ?? '');
+    key = cleanKey(prefs.getString('sbKey') ?? '');
     token = prefs.getString('sbTok') ?? '';
     refresh = prefs.getString('sbRef') ?? '';
     uid = prefs.getString('sbUid') ?? '';
@@ -1822,8 +1912,8 @@ class Sb {
   static bool get loggedIn => token.isNotEmpty && uid.isNotEmpty;
 
   static Future<void> saveCfg(String u, String k) async {
-    url = normUrl(u);
-    key = normKey(k);
+    url = cleanUrl(u);
+    key = cleanKey(k);
     await prefs.setString('sbUrl', url);
     await prefs.setString('sbKey', key);
   }
@@ -1880,11 +1970,15 @@ class Sb {
   static Future<dynamic> req(String method, String path, {Object? body, Map<String, String>? q, bool auth = true, bool retry = true, Map<String, String>? headers}) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
     try {
-      final base = normUrl(url);
+      final base = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
       final uri = Uri.parse('$base$path').replace(queryParameters: q);
       final r = await client.openUrl(method, uri);
       r.headers.set('apikey', key);
-      r.headers.set('Authorization', 'Bearer ${auth && token.isNotEmpty ? token : key}');
+      if (auth && token.isNotEmpty) {
+        r.headers.set('Authorization', 'Bearer $token');
+      } else if (key.startsWith('eyJ')) {
+        r.headers.set('Authorization', 'Bearer $key');
+      }
       r.headers.set('Content-Type', 'application/json');
       headers?.forEach(r.headers.set);
       if (body != null) r.add(utf8.encode(jsonEncode(body)));
@@ -1899,9 +1993,6 @@ class Sb {
           final j = jsonDecode(text);
           msg = '${j['message'] ?? j['msg'] ?? j['error_description'] ?? j['error'] ?? text}';
         } catch (_) {}
-        if (msg.contains('Invalid path specified')) {
-          msg = 'آدرس پروژه اشتباهه. باید دقیقاً به شکل https://xxxx.supabase.co باشه (بدون /rest/v1 و بدون لینک داشبورد). از دکمه‌ی اتصال بالای صفحه اصلاحش کن.';
-        }
         throw Exception(msg);
       }
       return text.isEmpty ? null : jsonDecode(text);
@@ -1954,7 +2045,7 @@ class _WorkPageState extends State<WorkPage> {
     try {
       await f();
     } catch (e) {
-      err = '$e'.replaceFirst('Exception: ', '');
+      err = faErr(e);
     }
     if (mounted) setState(() => busy = false);
   }
@@ -1984,18 +2075,10 @@ class _WorkPageState extends State<WorkPage> {
         FilledButton(
             onPressed: () async {
               if (url.text.trim().isEmpty || key.text.trim().isEmpty) return;
-              final nu = Sb.normUrl(url.text);
-              if (!RegExp(r'^https?://[^/]+\.[^/]+').hasMatch(nu)) {
-                setState(() => err = 'آدرس پروژه معتبر نیست؛ مثل https://xxxx.supabase.co');
-                return;
-              }
               await Sb.saveCfg(url.text, key.text);
               url.text = Sb.url;
               key.text = Sb.key;
-              setState(() {
-                editCfg = false;
-                err = '';
-              });
+              setState(() => editCfg = false);
             },
             child: const Text('ذخیره‌ی اتصال')),
       ]);
@@ -2011,10 +2094,12 @@ class _WorkPageState extends State<WorkPage> {
                 ? null
                 : () => run(() async {
                       if (reg) {
-                        if (name.text.trim().isEmpty) throw Exception('نام رو وارد کن');
-                        await Sb.signUp(email.text.trim(), pass.text, name.text.trim());
+                        if (cleanText(name.text).isEmpty) throw Exception('نام رو وارد کن');
+                        if (!cleanEmail(email.text).contains('@')) throw Exception('ایمیل درست وارد نشده');
+                        await Sb.signUp(cleanEmail(email.text), cleanText(pass.text), cleanText(name.text));
                       } else {
-                        await Sb.signIn(email.text.trim(), pass.text);
+                        if (!cleanEmail(email.text).contains('@')) throw Exception('ایمیل درست وارد نشده');
+                        await Sb.signIn(cleanEmail(email.text), cleanText(pass.text));
                       }
                       await _load();
                     }),
@@ -2062,7 +2147,7 @@ class _WorkPageState extends State<WorkPage> {
                                           if (ok != true) return;
                                           final done = await D.restore('${b['data']}');
                                           Gm.load();
-                                          Mn.load();
+                                          Mn.reload();
                                           if (!done) throw Exception('بازیابی ناموفق بود');
                                         }),
                                 child: const Text('بازیابی از سرور'))),
@@ -2088,7 +2173,7 @@ class _WorkPageState extends State<WorkPage> {
                         final nm = await askText(context, 'نام میزکار (شرکت / تیم)');
                         if (nm == null || nm.isEmpty) return;
                         await run(() async {
-                          await Sb.req('POST', '/rest/v1/rpc/create_workspace', body: {'p_name': nm, 'p_user': Sb.name.isEmpty ? Sb.email : Sb.name});
+                          await Sb.req('POST', '/rest/v1/rpc/create_workspace', body: {'p_name': cleanText(nm), 'p_user': Sb.name.isEmpty ? Sb.email : Sb.name});
                           await _load();
                         });
                       })),
@@ -2101,7 +2186,7 @@ class _WorkPageState extends State<WorkPage> {
                         final c = await askText(context, 'کد دعوت میزکار');
                         if (c == null || c.isEmpty) return;
                         await run(() async {
-                          await Sb.req('POST', '/rest/v1/rpc/join_workspace', body: {'p_code': c, 'p_user': Sb.name.isEmpty ? Sb.email : Sb.name});
+                          await Sb.req('POST', '/rest/v1/rpc/join_workspace', body: {'p_code': cleanKey(c).toUpperCase(), 'p_user': Sb.name.isEmpty ? Sb.email : Sb.name});
                           await _load();
                         });
                       })),
@@ -2178,7 +2263,7 @@ class _WsPageState extends State<WsPage> {
       if (mounted) {
         setState(() {
           loading = false;
-          if (!silent) err = '$e'.replaceFirst('Exception: ', '');
+          if (!silent) err = faErr(e);
         });
       }
     }
@@ -2256,7 +2341,7 @@ class _WsPageState extends State<WsPage> {
       await f();
       await _load(silent: true);
     } catch (e) {
-      snack('$e'.replaceFirst('Exception: ', ''));
+      snack(faErr(e));
     }
   }
 
@@ -2479,56 +2564,65 @@ class _WsPageState extends State<WsPage> {
 }
 
 // ویجت پت: تصویر پیکسلی پت (با آیتم‌ها) را می‌سازد و برای ویجت اندروید ذخیره می‌کند
+Future<Uint8List?> _petPng(Map h) async {
+  final hatched = h['hatched'] != false;
+  final rar = (h['rar'] as int?) ?? 0, col = (h['col'] as int?) ?? 0;
+  const sz = 192.0;
+  final cell = sz / 48;
+  final rec = ui.PictureRecorder();
+  final cv = Canvas(rec);
+  final paint = Paint()..filterQuality = FilterQuality.none;
+  void draw(ui.Image im, Rect dst) => cv.drawImageRect(im, Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()), dst, paint);
+  if (!hatched) {
+    draw(await pxImage(eggSprite('${h['a']}', 0, rar)), const Rect.fromLTWH(0, 0, sz, sz));
+  } else {
+    final stage = stageOf((h['lv'] as int?) ?? 1);
+    final spr = petSprite('${h['a']}', stage, Gm.sat(h) < 25 ? 'sad' : 'idle', rar, col);
+    final pim = await pxImage(spr.px);
+    final eq = Map<String, dynamic>.from((h['eq'] as Map?) ?? {});
+    Future<void> item(String slot, double cx, double cy, double w) async {
+      final it = eq[slot] == null ? null : itemById('${eq[slot]}');
+      if (it == null) return;
+      final size = w * cell;
+      draw(await pixelEmoji(it.emoji), Rect.fromLTWH(cx * cell - size / 2, cy * cell - size / 2, size, size));
+    }
+
+    await item('back', spr.bx - spr.brx * .95, spr.by - spr.bry * .2, spr.brx * 1.7);
+    draw(pim, const Rect.fromLTWH(0, 0, sz, sz));
+    await item('neck', spr.hx, spr.hy + spr.hry * .95, spr.brx * 1.05);
+    await item('face', spr.hx, spr.ey + .6, spr.hrx * 1.45);
+    await item('hat', spr.hx, spr.hy - spr.hry * .95 - spr.hrx * 1.5 * .12, spr.hrx * 1.5);
+    await item('hand', spr.bx + spr.brx * 1.1, spr.by + spr.bry * .15, spr.brx * 1.3);
+  }
+  final out = await rec.endRecording().toImage(sz.toInt(), sz.toInt());
+  final bd = await out.toByteData(format: ui.ImageByteFormat.png);
+  return bd?.buffer.asUint8List();
+}
+
+// ویجت پت: تا ۳ پت (پت فعال اول) با عکس، نام، سطح و سیری
 Future<void> syncPetWidget() async {
   try {
     if (Gm.heroes.isEmpty) return;
-    final h = Gm.heroes[Gm.active];
-    final hatched = h['hatched'] != false;
-    final rar = (h['rar'] as int?) ?? 0, col = (h['col'] as int?) ?? 0;
-    const sz = 192.0;
-    final cell = sz / 48;
-    final rec = ui.PictureRecorder();
-    final cv = Canvas(rec);
-    final paint = Paint()..filterQuality = FilterQuality.none;
-    Future<void> img(ui.Image im, double cx, double cy, double w) async {
-      final size = w * cell;
-      cv.drawImageRect(im, Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()), Rect.fromLTWH(cx * cell - size / 2, cy * cell - size / 2, size, size), paint);
+    final order = <int>[Gm.active, for (var i = 0; i < Gm.heroes.length; i++) if (i != Gm.active) i].take(3).toList();
+    var n = 0;
+    for (var slot = 0; slot < order.length; slot++) {
+      final idx = order[slot];
+      final h = Gm.heroes[idx];
+      final png = await _petPng(h);
+      if (png == null) continue;
+      final path = '${Directory.systemTemp.path}/konj_pet_$slot.png';
+      await File(path).writeAsBytes(png);
+      final lv = (h['lv'] as int?) ?? 1;
+      final hatched = h['hatched'] != false;
+      await HomeWidget.saveWidgetData<String>('petImg$slot', path);
+      await HomeWidget.saveWidgetData<String>('petName$slot', '${h['n']}');
+      await HomeWidget.saveWidgetData<String>('petInfo$slot', hatched ? '${stageNames[stageOf(lv)]} • سطح $lv' : '🥚 تخم');
+      await HomeWidget.saveWidgetData<String>('petSat$slot', '${hatched ? Gm.sat(h).round() : 100}');
+      await HomeWidget.saveWidgetData<String>('petIdx$slot', '$idx');
+      n++;
     }
-
-    if (!hatched) {
-      final im = await pxImage(eggSprite('${h['a']}', 0, rar));
-      cv.drawImageRect(im, Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()), const Rect.fromLTWH(0, 0, sz, sz), paint);
-    } else {
-      final stage = stageOf((h['lv'] as int?) ?? 1);
-      final sat = Gm.sat(h);
-      final spr = petSprite('${h['a']}', stage, sat < 25 ? 'sad' : 'idle', rar, col);
-      final pim = await pxImage(spr.px);
-      final eq = Map<String, dynamic>.from((h['eq'] as Map?) ?? {});
-      Future<void> item(String slot, double cx, double cy, double w) async {
-        final it = eq[slot] == null ? null : itemById('${eq[slot]}');
-        if (it == null) return;
-        await img(await pixelEmoji(it.emoji), cx, cy, w);
-      }
-
-      await item('back', spr.bx - spr.brx * .95, spr.by - spr.bry * .2, spr.brx * 1.7);
-      cv.drawImageRect(pim, Rect.fromLTWH(0, 0, pim.width.toDouble(), pim.height.toDouble()), const Rect.fromLTWH(0, 0, sz, sz), paint);
-      await item('neck', spr.hx, spr.hy + spr.hry * .95, spr.brx * 1.05);
-      await item('face', spr.hx, spr.ey + .6, spr.hrx * 1.45);
-      await item('hat', spr.hx, spr.hy - spr.hry * .95 - spr.hrx * 1.5 * .12, spr.hrx * 1.5);
-      await item('hand', spr.bx + spr.brx * 1.1, spr.by + spr.bry * .15, spr.brx * 1.3);
-    }
-    final out = await rec.endRecording().toImage(sz.toInt(), sz.toInt());
-    final bd = await out.toByteData(format: ui.ImageByteFormat.png);
-    if (bd == null) return;
-    final path = '${Directory.systemTemp.path}/konj_pet_widget.png';
-    await File(path).writeAsBytes(bd.buffer.asUint8List());
-    final lv = (h['lv'] as int?) ?? 1;
-    await HomeWidget.saveWidgetData<String>('petImg', path);
-    await HomeWidget.saveWidgetData<String>('petName', '${h['n']}');
-    await HomeWidget.saveWidgetData<String>('petInfo', hatched ? '${animalById('${h['a']}').name} • ${stageNames[stageOf(lv)]} • سطح $lv' : '🥚 تخم (برای باز کردنش وارد برنامه شو)');
-    await HomeWidget.saveWidgetData<int>('petSat', Gm.sat(h).round());
-    await HomeWidget.saveWidgetData<int>('petSatT', DateTime.now().millisecondsSinceEpoch);
-    await HomeWidget.saveWidgetData<String>('petBtn', hatched ? 'غذا دادن' : 'باز کردن تخم');
+    await HomeWidget.saveWidgetData<String>('petCount', '$n');
+    await HomeWidget.saveWidgetData<String>('petSatT', '${DateTime.now().millisecondsSinceEpoch}');
     await HomeWidget.updateWidget(androidName: 'KonjPetWidgetProvider');
   } catch (_) {}
 }
@@ -2588,11 +2682,18 @@ class Mn {
     return ds(DateTime(n.year, n.month, n.day - ((n.weekday + 1) % 7)));
   }
 
+  static void reload() {
+    d = {};
+    load();
+  }
+
   static void load() {
-    try {
-      d = Map<String, dynamic>.from(jsonDecode(prefs.getString('mc') ?? '{}') as Map);
-    } catch (_) {
-      d = {};
+    if (d.isEmpty) {
+      try {
+        d = Map<String, dynamic>.from(jsonDecode(prefs.getString('mc') ?? '{}') as Map);
+      } catch (_) {
+        d = {};
+      }
     }
     final day = ds(DateTime.now()), wk = weekKey();
     if (d['day'] != day) {
@@ -2636,15 +2737,19 @@ class Mn {
   static void claim(Mission m, bool weekly) {
     load();
     if (!ready(m, weekly)) return;
-    (weekly ? d['wcl'] : d['dcl'] as List).add(m.id);
+    final list = (weekly ? d['wcl'] : d['dcl']) as List;
+    list.add(m.id);
+    save(); // اول ثبت می‌کنیم تا دوباره نشه گرفتش
     Gm.coins += m.reward;
     Gm.addXp(m.reward);
     Gm.say('✅ ماموریت انجام شد: +${m.reward} سکه 🪙');
-    final t = today();
-    if (!weekly && t.every((x) => claimed(x, false)) && !((d['dcl'] as List).contains('bonus'))) {
-      (d['dcl'] as List).add('bonus');
-      Gm.coins += 25;
-      Gm.say('🎉 هر ۳ ماموریت امروز تموم شد!\nجایزه‌ی ویژه: ۲۵ سکه', true);
+    if (!weekly) {
+      final dl = d['dcl'] as List;
+      if (today().every((x) => dl.contains(x.id)) && !dl.contains('bonus')) {
+        dl.add('bonus');
+        Gm.coins += 25;
+        Gm.say('🎉 هر ۳ ماموریت امروز تموم شد!\nجایزه‌ی ویژه: ۲۵ سکه', true);
+      }
     }
     save();
     Gm.save();
@@ -2793,16 +2898,14 @@ Future<void> scheduleFocusRem() async {
 }
 
 const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
-const String kVer = '1.0.7';
+const String kVer = '1.0.8';
 const kWhatsNew = [
-  '☁️ پشتیبان‌گیری آنلاین از همه‌ی اطلاعات (میز کار ← پشتیبان‌گیری)',
-  '🎯 ماموریت‌های روزانه و هفتگی با جایزه',
-  '📔 حال روز و بازبینی روز یکی شد؛ آیکون بالای صفحه',
-  '🗑️ سطل بازیافت: هر چیزی که حذف کنی ۱۰ دقیقه قابل بازگردانیه',
-  '🏁 اهداف زیرمجموعه دارن و درصد پیشرفت خودکار حساب می‌شه',
-  '🐾 ویجت پت، آلبوم پت‌ها، بازی حافظه و غذاهای ویژه‌ی هفته',
-  '🔁 کارهای تکراری، هدف پس‌انداز، پیشنهاد بودجه و گزارش متنی ماه',
-  '💼 میز کار: نقش سرپرست، رتبه‌بندی هفتگی و اعلان کار جدید',
+  '🍖 رفع باگ غذا دادن به پت‌ها',
+  '⏱️ تایمر تمرکز دایره‌ای (۱۰ تا ۶۰ دقیقه) و سؤال امنیتی ملایم‌تر',
+  '💼 وظایف میز کار توی تب کارها و ویجت اصلی + آیکون میز کار بالای صفحه',
+  '🐾 ویجت پت همه‌ی پت‌ها رو نشون می‌ده و آیتم‌ها ساده‌ی پیکسلی شدن',
+  '🎯 رفع تکرار سکه‌ی ماموریت‌ها و پس‌زمینه‌ی پت',
+  '🔐 ورود به میز کار مقاوم‌تر شد و خطاها فارسی و راهنما دارن',
 ];
 
 class UpdInfo {
@@ -2851,6 +2954,14 @@ Future<String?> askText(BuildContext c, String title, {String init = '', int lin
               FilledButton(onPressed: () => Navigator.pop(ctx, t.text.trim()), child: const Text('تأیید')),
             ],
           ));
+}
+
+List<Map<String, dynamic>> wsCacheRead() {
+  try {
+    return [for (final e in (jsonDecode(prefs.getString('wsTasks') ?? '[]') as List)) Map<String, dynamic>.from(e as Map)];
+  } catch (_) {
+    return [];
+  }
 }
 
 final checkinReq = ValueNotifier<int>(0);
@@ -3133,7 +3244,7 @@ class D {
       g['progress'] ??= 0;
       g['deadline'] ??= ds(DateTime.now());
     }
-    prefs.setInt('ver', kDataVer);
+    prefs.setInt('ver', kVer);
   }
 
   static Future<void> save() async {
@@ -3147,7 +3258,7 @@ class D {
 
   static String backup() => jsonEncode({
         'app': 'Konj Planner',
-        'ver': kDataVer,
+        'ver': kVer,
         'tasks': tasks,
         'events': events,
         'txs': txs,
@@ -3225,6 +3336,13 @@ Future<void> syncHomeWidget() async {
       for (final k in top.take(20)) {'k': 't', 'i': '☐', 'id': '${k['id']}', 't': '${k['star'] == true ? '★ ' : ''}${k['t']}', 'd': false},
       for (final h in D.habits) {'k': 'h', 'i': hDoneG(h, today) ? '✅' : '🔥', 'id': '${h['id']}', 't': '${h['t']}', 'd': hDoneG(h, today)},
     ];
+    final wsT = wsCacheRead();
+    if (wsT.isNotEmpty) {
+      items.add({'k': 'hdr', 'i': '💼', 'id': '', 't': 'وظایف', 'd': false});
+      for (final w in wsT.take(8)) {
+        items.add({'k': 'w', 'i': '☐', 'id': '${w['id']}', 't': '${w['title']}', 'd': false});
+      }
+    }
     // رنگ ویجت از رنگ برنامه
     final p = pals[(prefs.getInt('clr') ?? 0).clamp(0, pals.length - 1)];
     final hsl = HSLColor.fromColor(p.c);
@@ -3233,7 +3351,7 @@ Future<void> syncHomeWidget() async {
     await HomeWidget.saveWidgetData<String>('wbg', _hex(bg));
     await HomeWidget.saveWidgetData<String>('wacc', _hex(acc));
     await HomeWidget.saveWidgetData<String>('today', fd(ds(now)));
-    await HomeWidget.saveWidgetData<String>('summary', 'کار: $open  •  عقب‌افتاده: $overdue  •  عادت: $hd/${D.habits.length}');
+    await HomeWidget.saveWidgetData<String>('summary', 'کار: $open  •  عقب‌افتاده: $overdue  •  عادت: $hd/${D.habits.length}${wsT.isEmpty ? '' : '  •  وظیفه: ${wsT.length}'}');
     await HomeWidget.saveWidgetData<String>('items', jsonEncode(items));
     await HomeWidget.updateWidget(androidName: 'KonjPlannerWidgetProvider');
   } catch (_) {}
@@ -3245,12 +3363,25 @@ Future<void> syncHomeWidget() async {
 @pragma('vm:entry-point')
 Future<void> widgetBackground(Uri? uri) async {
   if (uri == null || uri.pathSegments.isEmpty) return;
-  if (uri.host != 'done' && uri.host != 'habit') return;
-  final id = int.tryParse(uri.pathSegments.first);
-  if (id == null) return;
+  if (uri.host != 'done' && uri.host != 'habit' && uri.host != 'wtask') return;
   WidgetsFlutterBinding.ensureInitialized();
   prefs = await SharedPreferences.getInstance();
   await prefs.reload();
+  if (uri.host == 'wtask') {
+    Sb.load();
+    final wid = uri.pathSegments.first;
+    try {
+      await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.$wid'}, body: {'status': 'done', 'updated_at': DateTime.now().toUtc().toIso8601String()});
+    } catch (_) {
+      return;
+    }
+    await prefs.setString('wsTasks', jsonEncode(wsCacheRead()..removeWhere((x) => x['id'] == wid)));
+    D.load();
+    await syncHomeWidget();
+    return;
+  }
+  final id = int.tryParse(uri.pathSegments.first);
+  if (id == null) return;
   jal = prefs.getBool('jal') ?? true;
   D.load();
   Gm.load();
@@ -3446,6 +3577,11 @@ Future<void> askPerms() async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterError.onError = (d) => FlutterError.presentError(d);
+  ui.PlatformDispatcher.instance.onError = (e, st) => true; // خطای ناخواسته برنامه رو نمی‌بنده
+  if (kReleaseMode) {
+    ErrorWidget.builder = (d) => const Center(child: Text('⚠️ مشکلی در نمایش این بخش پیش اومد', textDirection: TextDirection.rtl, style: TextStyle(color: Colors.grey)));
+  }
   // UI is mounted immediately. All local services are initialized by Bootstrap
   // after the first frame, so notification/widget failures can never block the UI.
   runApp(const Bootstrap());
@@ -3710,6 +3846,7 @@ class _Sub {
 class _H extends State<Home> with WidgetsBindingObserver {
   int tab = 0, cy = 1400, cm = 1, hv = 0, fMin = 25, fType = 0, fMon = 0;
   final stageKey = GlobalKey<PetStageState>();
+  final ScrollController heroSc = ScrollController();
   Uri? _pendingUri;
   bool _booted = false, _viaWidget = false;
   Timer? _ft, _wsT;
@@ -3881,7 +4018,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     }
   }
 
-  int _nextQ() => DateTime.now().millisecondsSinceEpoch + (6 + math.Random().nextInt(4)) * 60000;
+  int _nextQ() => DateTime.now().millisecondsSinceEpoch + (12 + math.Random().nextInt(7)) * 60000;
 
   // سؤال امنیتی: اگر جواب ندی یا غلط بدی تمرکز متوقف می‌شه
   Future<void> _askQuiz() async {
@@ -3894,8 +4031,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
       if (d != 0 && ans + d > 0) opts.add(ans + d);
     }
     final list = opts.toList()..shuffle();
-    var secs = 25;
+    var secs = 60;
     var done = false;
+    var tries = 0;
+    var msg = '';
     Timer? tm;
     sfx('add');
     final ok = await showDialog<bool>(
@@ -3917,13 +4056,23 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 canPop: false,
                 child: AlertDialog(
                   title: Text('هنوز اینجایی؟ ⏱ $secs'),
-                  content: Text('برای ادامه‌ی تمرکز جواب بده:\n\n$a + $b = ؟', style: const TextStyle(fontSize: 18)),
+                  content: Text('برای ادامه‌ی تمرکز جواب بده:\n\n$a + $b = ؟${msg.isEmpty ? '' : '\n\n$msg'}', style: const TextStyle(fontSize: 18)),
                   actions: [
                     for (final o in list)
                       FilledButton.tonal(
                           onPressed: () {
-                            done = true;
-                            Navigator.of(ctx).pop(o == ans);
+                            if (o == ans) {
+                              done = true;
+                              Navigator.of(ctx).pop(true);
+                            } else {
+                              tries++;
+                              if (tries >= 2) {
+                                done = true;
+                                Navigator.of(ctx).pop(false);
+                              } else {
+                                set(() => msg = 'جواب غلطه؛ یه بار دیگه فرصت داری');
+                              }
+                            }
                           },
                           child: Text('$o')),
                   ],
@@ -3954,7 +4103,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       return;
     }
     final q = prefs.getInt('fQ') ?? 0;
-    if (q > 0 && now >= q && !_qOpen && end - now > 25000 && mounted) {
+    if (q > 0 && now >= q && !_qOpen && end - now > 90000 && mounted) {
       _askQuiz();
     } else if (mounted && tab == 4 && !_qOpen) {
       setState(() {});
@@ -4010,7 +4159,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
         context: context,
         builder: (ctx) => AlertDialog(
               title: const Text('شروع تمرکز؟'),
-              content: Text('تا $fMin دقیقه‌ی آینده نمی‌تونی از این بخش بیرون بیای. اگه از برنامه خارج بشی، جلسه متوقف می‌شه و سکه‌ای نمی‌گیری.\n\nحین جلسه چند بار یه سؤال ساده می‌پرسم؛ اگه جواب ندی تمرکز قطع می‌شه.\n\nصفحه روشن می‌مونه.'),
+              content: Text('تا $fMin دقیقه‌ی آینده نمی‌تونی از این بخش بیرون بیای. اگه از برنامه خارج بشی، جلسه متوقف می‌شه و سکه‌ای نمی‌گیری.\n\nاگه سؤال امنیتی روشن باشه، هر چند دقیقه یه سؤال ساده می‌پرسم (۱ دقیقه وقت داری).\n\nصفحه روشن می‌مونه.'),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')),
                 FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('شروع')),
@@ -4020,7 +4169,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     _keepOn(true);
     tab = 4;
     if (fMin == 60) await prefs.setString('f60', ds(DateTime.now()));
-    await prefs.setInt('fQ', _nextQ());
+    await prefs.setInt('fQ', (prefs.getBool('fQuiz') ?? true) && fMin >= 25 ? _nextQ() : 0);
     final end = DateTime.now().add(Duration(minutes: fMin)).millisecondsSinceEpoch;
     await prefs.setInt('fEnd', end);
     await prefs.setInt('fLen', fMin);
@@ -4068,6 +4217,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     checkinReq.removeListener(_onCheckinReq);
     _ft?.cancel();
     _wsT?.cancel();
+    heroSc.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -4110,6 +4260,11 @@ class _H extends State<Home> with WidgetsBindingObserver {
       await Future.delayed(const Duration(milliseconds: 200));
       if (!mounted) return;
       if (u.host == 'pet') {
+        final pi = u.pathSegments.isEmpty ? null : int.tryParse(u.pathSegments.first);
+        if (pi != null && pi >= 0 && pi < Gm.heroes.length) {
+          Gm.active = pi;
+          Gm.save();
+        }
         setState(() {
           tab = 5;
           hv = 1;
@@ -4211,7 +4366,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
   void undo(String msg, VoidCallback back) {
     final m = ScaffoldMessenger.of(context);
     m.hideCurrentSnackBar();
-    m.showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 5), action: SnackBarAction(label: 'بازگردانی', onPressed: back)));
+    m.showSnackBar(SnackBar(content: Text(msg), persist: false, duration: const Duration(seconds: 5), action: SnackBarAction(label: 'بازگردانی', onPressed: back)));
   }
 
   void toast(String msg) {
@@ -4852,6 +5007,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     final now = DateTime.now(), t = ds(now), nowIso = now.toIso8601String();
     final wk = ds(now.subtract(Duration(days: (now.weekday + 1) % 7)));
     final mo = monthStart(now);
+    final wsT = wsCacheRead();
     final ev = D.events.where((e) => e['wd'] == now.weekday && t.compareTo(e['from']) >= 0 && t.compareTo(e['to']) <= 0).toList()
       ..sort(byStart);
     final overdue = D.tasks.where((k) {
@@ -4932,6 +5088,25 @@ class _H extends State<Home> with WidgetsBindingObserver {
         OutlinedButton.icon(icon: const Icon(Icons.bolt), label: const Text('حداقل روز'), onPressed: minimalDay),
         OutlinedButton.icon(icon: const Icon(Icons.insights), label: const Text('بازبینی هفته'), onPressed: weekReview),
       ]),
+      if (wsT.isNotEmpty) ...[
+        Padding(
+            padding: const EdgeInsets.fromLTRB(4, 12, 4, 4),
+            child: Row(children: [
+              const Icon(Icons.business_center_outlined, size: 20),
+              const SizedBox(width: 8),
+              Text('وظایف (${wsT.length})', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const Spacer(),
+              TextButton(onPressed: _openWork, child: const Text('میز کار')),
+            ])),
+        for (final w in wsT)
+          Card(
+              child: ListTile(
+                  leading: Checkbox(value: false, onChanged: (_) => _wsDone(w)),
+                  title: Text('${w['title']}'),
+                  subtitle: Text('💼 ${w['ws']}${w['due'] != null ? ' • مهلت: ${fd('${w['due']}')}' : ''}'),
+                  onTap: _openWork)),
+        const SizedBox(height: 4),
+      ],
       for (final e in ev)
         Card(child: ListTile(leading: const Icon(Icons.schedule), title: Text(e['t']), subtitle: Text('${hm(e['s'])} – ${hm(e['e'])}'))),
       const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('نیاز به انجام', style: TextStyle(fontWeight: FontWeight.bold))),
@@ -6151,20 +6326,55 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   // اعلان کار جدید میز کار (وقتی برنامه در حال اجراست یا تازه به پس‌زمینه رفته)
   Future<void> _pollWs() async {
-    if (!Sb.ok || !Sb.loggedIn || !(prefs.getBool('wsNotif') ?? true)) return;
+    if (!Sb.ok || !Sb.loggedIn) return;
     try {
-      final r = Sb.rows(await Sb.req('GET', '/rest/v1/tasks', q: {'assignee': 'eq.${Sb.uid}', 'status': 'neq.done', 'select': 'id,title,workspace_id'}));
+      final r = Sb.rows(await Sb.req('GET', '/rest/v1/tasks', q: {'assignee': 'eq.${Sb.uid}', 'status': 'neq.done', 'select': 'id,title,workspace_id,due', 'order': 'created_at.desc'}));
+      final wsn = <String, String>{};
+      try {
+        for (final w in Sb.rows(await Sb.req('GET', '/rest/v1/workspaces', q: {'select': 'id,name'}))) {
+          wsn['${w['id']}'] = '${w['name']}';
+        }
+      } catch (_) {}
       final old = prefs.getStringList('wsSeen');
       final seen = (old ?? <String>[]).toSet();
-      if (old != null) {
+      if (old != null && (prefs.getBool('wsNotif') ?? true)) {
         for (final t in r) {
           if (!seen.contains('${t['id']}')) {
-            notif.show(6000 + ('${t['id']}'.hashCode.abs() % 900), '📋 کار جدید در میز کار', '${t['title']}', nd);
+            notif.show(6000 + ('${t['id']}'.hashCode.abs() % 900), '📋 وظیفه‌ی جدید در میز کار', '${t['title']}', nd);
           }
         }
       }
       await prefs.setStringList('wsSeen', [for (final t in r) '${t['id']}']);
+      await prefs.setString('wsTasks', jsonEncode([for (final t in r) {'id': '${t['id']}', 'title': '${t['title']}', 'due': t['due'], 'ws': wsn['${t['workspace_id']}'] ?? ''}]));
+      if (mounted) setState(() {});
+      syncHomeWidget();
     } catch (_) {}
+  }
+
+  Future<void> _wsDone(Map w) async {
+    try {
+      await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${w['id']}'}, body: {'status': 'done', 'updated_at': DateTime.now().toUtc().toIso8601String()});
+      try {
+        final wid = Sb.rows(await Sb.req('GET', '/rest/v1/tasks', q: {'id': 'eq.${w['id']}', 'select': 'workspace_id'}));
+        if (wid.isNotEmpty) await Sb.req('POST', '/rest/v1/reports', body: {'task_id': w['id'], 'workspace_id': wid.first['workspace_id'], 'name': Sb.name, 'kind': 'status', 'text': 'وضعیت: انجام شد'});
+      } catch (_) {}
+      final l = wsCacheRead()..removeWhere((x) => x['id'] == w['id']);
+      await prefs.setString('wsTasks', jsonEncode(l));
+      await prefs.setStringList('wsSeen', [for (final x in l) '${x['id']}']);
+      sfx('done');
+      if (Gm.rw.add('ws:${w['id']}')) Gm.earn(6, 10, '+۶ سکه 🪙');
+      Mn.inc('tasks');
+      toast('وظیفه انجام شد ✓');
+      if (mounted) setState(() {});
+      syncHomeWidget();
+    } catch (e) {
+      toast(faErr(e));
+    }
+  }
+
+  Future<void> _openWork() async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WorkPage()));
+    _pollWs();
   }
 
   // ── تاریخچه‌ی روزها ──
@@ -6504,46 +6714,58 @@ class _H extends State<Home> with WidgetsBindingObserver {
     final running = end > 0;
     final len = prefs.getInt('fLen') ?? fMin;
     final left = running ? ((end - DateTime.now().millisecondsSinceEpoch) ~/ 1000).clamp(0, 86400).toInt() : 0;
-    String mmss(int x) => '${(x ~/ 60).toString().padLeft(2, '0')}:${(x % 60).toString().padLeft(2, '0')}';
     final h = Gm.heroes.isEmpty ? null : Gm.heroes[Gm.active];
+    final used60 = prefs.getString('f60') == ds(DateTime.now());
     return ListView(padding: const EdgeInsets.all(12), children: [
       Card(
           child: Padding(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               child: Column(children: [
                 if (h != null) FocusPet(hero: h, running: running) else const Text('🎯', style: TextStyle(fontSize: 56)),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
+                FocusDial(
+                    minutes: running ? len : fMin,
+                    leftSec: left,
+                    running: running,
+                    onChange: (m) {
+                      if (m == 60 && used60) {
+                        toast('تمرکز ۶۰ دقیقه‌ای فقط روزی یک بار ممکنه');
+                        m = 55;
+                      }
+                      if (m != fMin) {
+                        sfx('crack');
+                        setState(() => fMin = m);
+                      }
+                    }),
+                const SizedBox(height: 8),
                 if (running) ...[
-                  SizedBox(
-                      width: 190,
-                      height: 190,
-                      child: Stack(alignment: Alignment.center, children: [
-                        SizedBox(width: 190, height: 190, child: CircularProgressIndicator(value: (1 - left / (len * 60)).clamp(0.0, 1.0).toDouble(), strokeWidth: 10)),
-                        Text(mmss(left), style: const TextStyle(fontSize: 42, fontWeight: FontWeight.bold)),
-                      ])),
-                  const SizedBox(height: 12),
                   Text('جایزه‌ی این جلسه: ${focusCoins(len)} سکه و $len تجربه'),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(icon: const Icon(Icons.stop), label: const Text('انصراف (بدون سکه)'), onPressed: _focusCancel),
                 ] else ...[
-                  const Text('مدت تمرکز', style: TextStyle(fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Wrap(spacing: 8, children: [
-                    for (final m in [15, 25, 45, 60])
-                      ChoiceChip(
-                          label: Text(m == 60 && prefs.getString('f60') == ds(DateTime.now()) ? '۶۰ دقیقه (امروز استفاده شد)' : '$m دقیقه'),
-                          selected: fMin == m,
-                          onSelected: (_) {
-                            if (m == 60 && prefs.getString('f60') == ds(DateTime.now())) {
+                  const Text('دایره رو بکش و زمان تمرکز رو انتخاب کن (۱۰ تا ۶۰ دقیقه)', style: TextStyle(fontSize: 12)),
+                  Wrap(spacing: 6, children: [
+                    for (final m in [10, 15, 20, 30, 45, 60])
+                      ActionChip(
+                          label: Text(m == 60 && used60 ? '۶۰ ✓ امروز' : '$m'),
+                          backgroundColor: fMin == m ? Theme.of(context).colorScheme.primaryContainer : null,
+                          onPressed: () {
+                            if (m == 60 && used60) {
                               toast('تمرکز ۶۰ دقیقه‌ای فقط روزی یک بار ممکنه');
                               return;
                             }
                             setState(() => fMin = m);
                           }),
                   ]),
-                  const SizedBox(height: 12),
-                  Text('جایزه: ${focusCoins(fMin)} سکه و $fMin تجربه برای قهرمانت 🪙'),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
+                  Text('جایزه: ${focusCoins(fMin)} سکه و $fMin تجربه برای پتت 🪙'),
+                  SwitchListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('سؤال امنیتی حین تمرکز'),
+                      subtitle: const Text('فقط برای جلسه‌های ۲۵ دقیقه به بالا؛ هر ۱۲ تا ۱۸ دقیقه یه سؤال ساده با ۱ دقیقه مهلت', style: TextStyle(fontSize: 11)),
+                      value: prefs.getBool('fQuiz') ?? true,
+                      onChanged: (v) => setState(() => prefs.setBool('fQuiz', v))),
                   FilledButton.icon(icon: const Icon(Icons.play_arrow), label: const Text('شروع تمرکز'), onPressed: _focusStart),
                 ],
               ]))),
@@ -6551,8 +6773,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       if (!running) _focusTip(),
       const Padding(
           padding: EdgeInsets.all(8),
-          child: Text('گوشی رو کنار بذار و فقط روی یک کار تمرکز کن. وقتی تایمر تموم شد اعلان می‌آد و سکه‌ها حساب می‌شن. اگه از برنامه بیرون بری، تایمر ادامه داره.',
-              style: TextStyle(fontSize: 12))),
+          child: Text('گوشی رو کنار بذار و فقط روی یک کار تمرکز کن. وقتی تایمر تموم شد اعلان می‌آد و سکه‌ها حساب می‌شن. اگه از برنامه بیرون بری، جلسه متوقف می‌شه.', style: TextStyle(fontSize: 12))),
     ]);
   }
 
@@ -6660,14 +6881,14 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 return ListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
-                    title: Text(m.text),
+                    title: Text(m.text, style: done ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
                     subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       const SizedBox(height: 4),
                       LinearProgressIndicator(value: p / m.target, minHeight: 6, borderRadius: BorderRadius.circular(6)),
                       Text('$p از ${m.target} • جایزه: ${m.reward} سکه', style: const TextStyle(fontSize: 12)),
                     ]),
                     trailing: done
-                        ? const Icon(Icons.check_circle, color: Colors.green)
+                        ? const Text('✓ دریافت شد', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold))
                         : FilledButton.tonal(
                             onPressed: Mn.ready(m, weekly)
                                 ? () {
@@ -6742,6 +6963,14 @@ class _H extends State<Home> with WidgetsBindingObserver {
                       subtitle: const Text('۵۰۰ سکه برای اولین افسانه‌ای'),
                       trailing: Gm.rw.contains('alb:l') ? const Icon(Icons.check_circle, color: Colors.green) : FilledButton.tonal(onPressed: legend > 0 ? () { Navigator.pop(ctx); claim('alb:l', 500, 'اولین پت افسانه‌ای!'); } : null, child: const Text('دریافت'))),
                 ]))));
+  }
+
+  Future<void> _toStage() async {
+    if (heroSc.hasClients && heroSc.offset > 8) {
+      try {
+        await heroSc.animateTo(0, duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
+      } catch (_) {}
+    }
   }
 
   void _noCoins(int price) {
@@ -6940,18 +7169,28 @@ class _H extends State<Home> with WidgetsBindingObserver {
               title: Text('${it.name} × ${Gm.inv[it.id]}'),
               subtitle: Text('${loved ? '+${(it.xp * 1.5).round()} تجربه (محبوبشه 😍)' : '+${it.xp} تجربه'} • 🍖 +${foodSat(it)} سیری'),
               trailing: FilledButton.tonal(
-                  onPressed: () {
+                  onPressed: () async {
                     if (!hatched) {
                       toast('اول تخم رو باز کن 🥚');
                       return;
                     }
+                    await _toStage();
                     final st = stageKey.currentState;
-                    if (st == null || st.busy) return;
-                    st.feed(it, () {
+                    void eatNow() {
                       final m = Gm.feed(h, it);
                       if (m.isNotEmpty) toast(m);
                       if (mounted) setState(() {});
-                    });
+                    }
+
+                    if (st == null) {
+                      eatNow(); // اگه صحنه در دسترس نبود، بدون انیمیشن هم غذا داده می‌شه
+                      return;
+                    }
+                    if (st.busy) {
+                      toast('پت داره مشغوله؛ یه لحظه صبر کن');
+                      return;
+                    }
+                    st.feed(it, eatNow);
                   },
                   child: const Text('غذا دادن'))));
         }
@@ -7004,7 +7243,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       }
     }
     kids.add(const SizedBox(height: 80));
-    return ListView(padding: const EdgeInsets.fromLTRB(12, 8, 12, 12), children: kids);
+    return ListView(controller: heroSc, padding: const EdgeInsets.fromLTRB(12, 8, 12, 12), children: kids);
   }
 
   @override
@@ -7029,6 +7268,13 @@ class _H extends State<Home> with WidgetsBindingObserver {
                       final m = readMoods()[ds(DateTime.now())];
                       return m == null ? '📔' : const ['😞', '😕', '😐', '🙂', '😄'][((m['m'] as int?) ?? 2).clamp(0, 4).toInt()];
                     }(), style: const TextStyle(fontSize: 22)))),
+            IconButton(
+                tooltip: 'میز کار',
+                onPressed: locked ? lockMsg : _openWork,
+                icon: Badge(
+                    isLabelVisible: wsCacheRead().isNotEmpty,
+                    label: Text('${wsCacheRead().length}'),
+                    child: const Icon(Icons.business_center_outlined))),
             PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert),
                 tooltip: 'بیشتر',
@@ -7037,7 +7283,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   if (v == 'bin') binSheet();
                   if (v == 'help') openGuide();
                   if (v == 'hist') historyDays();
-                  if (v == 'work') Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WorkPage()));
+                  if (v == 'work') _openWork();
                   if (v == 'upd') _checkUpdate(manual: true);
                 },
                 itemBuilder: (_) => const [
@@ -7062,6 +7308,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   return;
                 }
                 setState(() => tab = i);
+                if (i == 0) _pollWs();
               },
               destinations: const [
                 NavigationDestination(icon: Icon(Icons.checklist), label: 'کارها'),
