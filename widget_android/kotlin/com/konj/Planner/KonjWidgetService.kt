@@ -42,8 +42,14 @@ class KonjWidgetService : RemoteViewsService() {
             v.setTextViewText(R.id.item_text, o.optString("t"))
             v.setTextColor(R.id.item_text, if (done) Color.parseColor("#99FFFFFF") else Color.WHITE)
             v.setTextColor(R.id.item_icon, if (isHabit) acc else Color.WHITE)
+            if (kind == "hdr") {
+                v.setTextColor(R.id.item_text, acc)
+                v.setTextViewText(R.id.item_text, o.optString("t"))
+                return v
+            }
+            val host = when (kind) { "h" -> "habit"; "w" -> "wtask"; else -> "done" }
             val fill = Intent().apply {
-                data = Uri.parse(if (isHabit) "konj://habit/$id" else "konj://done/$id")
+                data = Uri.parse("konj://" + host + "/" + id)
             }
             v.setOnClickFillInIntent(R.id.item_root, fill)
             return v
