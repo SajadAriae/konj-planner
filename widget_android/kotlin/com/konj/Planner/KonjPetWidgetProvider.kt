@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
+import android.view.View
 import android.widget.RemoteViews
 import es.antonborri.home_widget.HomeWidgetLaunchIntent
 import es.antonborri.home_widget.HomeWidgetProvider
@@ -21,27 +22,39 @@ class KonjPetWidgetProvider : HomeWidgetProvider() {
         widgetData: SharedPreferences
     ) {
         val bg = col(widgetData.getString("wbg", null), "#1F2A2E")
-        val acc = col(widgetData.getString("wacc", null), "#2E9E8A")
-        val path = widgetData.getString("petImg", "") ?: ""
-        val bmp = if (path.isNotEmpty()) BitmapFactory.decodeFile(path) else null
-        val sat0 = try { widgetData.getInt("petSat", 80) } catch (e: Exception) { 80 }
-        val satT = try { widgetData.getLong("petSatT", System.currentTimeMillis()) } catch (e: Exception) { System.currentTimeMillis() }
+        val count = widgetData.getString("petCount", "0")?.toIntOrNull() ?: 0
+        val satT = widgetData.getString("petSatT", null)?.toLongOrNull() ?: System.currentTimeMillis()
         val hours = (System.currentTimeMillis() - satT) / 3600000.0
-        val sat = Math.max(0, Math.round(sat0 - hours * 2.5).toInt())
+
+        val slots = intArrayOf(R.id.pet_s0, R.id.pet_s1, R.id.pet_s2)
+        val imgs = intArrayOf(R.id.pet_img0, R.id.pet_img1, R.id.pet_img2)
+        val names = intArrayOf(R.id.pet_name0, R.id.pet_name1, R.id.pet_name2)
+        val infos = intArrayOf(R.id.pet_info0, R.id.pet_info1, R.id.pet_info2)
+        val bars = intArrayOf(R.id.pet_sat0, R.id.pet_sat1, R.id.pet_sat2)
 
         appWidgetIds.forEach { id ->
             val v = RemoteViews(context.packageName, R.layout.konj_pet_widget)
             v.setInt(R.id.pet_bg, "setColorFilter", bg)
-            if (bmp != null) v.setImageViewBitmap(R.id.pet_img, bmp)
-            v.setTextViewText(R.id.pet_name, widgetData.getString("petName", "") ?: "")
-            val info = widgetData.getString("petInfo", "") ?: ""
-            v.setTextViewText(R.id.pet_info, if (sat < 25 && info.isNotEmpty()) info + "  \uD83C\uDF56" else info)
-            v.setProgressBar(R.id.pet_sat, 100, sat, false)
-            v.setTextViewText(R.id.pet_btn, widgetData.getString("petBtn", "") ?: "")
-            v.setInt(R.id.pet_btn, "setBackgroundColor", acc)
-            val open = HomeWidgetLaunchIntent.getActivity(context, MainActivity::class.java, Uri.parse("konj://pet"))
-            v.setOnClickPendingIntent(R.id.pet_root, open)
-            v.setOnClickPendingIntent(R.id.pet_btn, open)
+            for (i in 0..2) {
+                val path = widgetData.getString("petImg" + i, "") ?: ""
+                val bmp = if (i < count && path.isNotEmpty()) BitmapFactory.decodeFile(path) else null
+                if (bmp == null) {
+                    v.setViewVisibility(slots[i], View.GONE)
+                    continue
+                }
+                v.setViewVisibility(slots[i], View.VISIBLE)
+                v.setImageViewBitmap(imgs[i], bmp)
+                v.setTextViewText(names[i], widgetData.getString("petName" + i, "") ?: "")
+                v.setTextViewText(infos[i], widgetData.getString("petInfo" + i, "") ?: "")
+                val sat0 = widgetData.getString("petSat" + i, "80")?.toIntOrNull() ?: 80
+                val sat = Math.max(0, Math.round(sat0 - hours * 2.5).toInt())
+                v.setProgressBar(bars[i], 100, sat, false)
+                val idx = widgetData.getString("petIdx" + i, i.toString()) ?: i.toString()
+                v.setOnClickPendingIntent(
+                    slots[i],
+                    HomeWidgetLaunchIntent.getActivity(context, MainActivity::class.java, Uri.parse("konj://pet/" + idx))
+                )
+            }
             appWidgetManager.updateAppWidget(id, v)
         }
     }
