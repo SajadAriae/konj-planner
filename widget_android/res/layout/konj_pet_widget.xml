@@ -1,71 +1,23 @@
-<?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/pet_root"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent">
-
-    <ImageView
-        android:id="@+id/pet_bg"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:scaleType="fitXY"
-        android:src="@drawable/konj_widget_bg" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:padding="10dp">
-
-        <ImageView
-            android:id="@+id/pet_img"
-            android:layout_width="92dp"
-            android:layout_height="92dp"
-            android:scaleType="fitCenter" />
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/pet_name"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:maxLines="1"
-                android:textColor="#FFFFFF"
-                android:textSize="17sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/pet_info"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:maxLines="2"
-                android:textColor="#E0E0E0"
-                android:textSize="12sp" />
-
-            <ProgressBar
-                android:id="@+id/pet_sat"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:layout_width="match_parent"
-                android:layout_height="8dp"
-                android:layout_marginTop="6dp"
-                android:max="100" />
-
-            <TextView
-                android:id="@+id/pet_btn"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:gravity="center"
-                android:padding="6dp"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-    </LinearLayout>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/pet_root" android:layout_width="match_parent" android:layout_height="match_parent">
+<ImageView android:id="@+id/pet_bg" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="fitXY" android:src="@drawable/konj_widget_bg"/>
+<LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:padding="8dp">
+<LinearLayout android:id="@+id/pet_s0" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center_horizontal" android:orientation="vertical" android:padding="2dp">
+<ImageView android:id="@+id/pet_img0" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:scaleType="fitCenter"/>
+<TextView android:id="@+id/pet_name0" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold"/>
+<TextView android:id="@+id/pet_info0" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:maxLines="1" android:textColor="#E0E0E0" android:textSize="11sp"/>
+<ProgressBar android:id="@+id/pet_sat0" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="6dp" android:layout_marginTop="3dp" android:max="100"/>
+</LinearLayout>
+<LinearLayout android:id="@+id/pet_s1" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center_horizontal" android:orientation="vertical" android:padding="2dp">
+<ImageView android:id="@+id/pet_img1" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:scaleType="fitCenter"/>
+<TextView android:id="@+id/pet_name1" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold"/>
+<TextView android:id="@+id/pet_info1" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:maxLines="1" android:textColor="#E0E0E0" android:textSize="11sp"/>
+<ProgressBar android:id="@+id/pet_sat1" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="6dp" android:layout_marginTop="3dp" android:max="100"/>
+</LinearLayout>
+<LinearLayout android:id="@+id/pet_s2" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:gravity="center_horizontal" android:orientation="vertical" android:padding="2dp">
+<ImageView android:id="@+id/pet_img2" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:scaleType="fitCenter"/>
+<TextView android:id="@+id/pet_name2" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:maxLines="1" android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold"/>
+<TextView android:id="@+id/pet_info2" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:maxLines="1" android:textColor="#E0E0E0" android:textSize="11sp"/>
+<ProgressBar android:id="@+id/pet_sat2" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="6dp" android:layout_marginTop="3dp" android:max="100"/>
+</LinearLayout>
+</LinearLayout>
 </FrameLayout>
