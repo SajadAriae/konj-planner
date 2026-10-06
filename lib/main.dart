@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,7 +16,7 @@ import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
 
 // ───────────────────────── تنظیمات و ثابت‌ها ─────────────────────────
-const kVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
+const kDataVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
 final notif = FlutterLocalNotificationsPlugin();
 late SharedPreferences prefs;
 final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/حالت تیره) زیاد می‌شود
@@ -1867,6 +1868,18 @@ String cleanUrl(String s) {
   var u = cleanKey(s);
   if (u.isEmpty) return u;
   if (!u.toLowerCase().startsWith('http')) u = 'https://$u';
+  try {
+    final p = Uri.parse(u);
+    if (p.host.isNotEmpty) {
+      // لینک داشبورد (supabase.com/dashboard/project/<ref>/...) → آدرس خود پروژه
+      if (p.host == 'supabase.com' || p.host == 'www.supabase.com' || p.host == 'app.supabase.com') {
+        final m = RegExp(r'/project/([a-z0-9]+)').firstMatch(p.path);
+        if (m != null) return 'https://${m.group(1)}.supabase.co';
+      }
+      // هر مسیر اضافه (/rest/v1، /auth/v1 و ...) حذف می‌شود
+      return '${p.scheme}://${p.host}${p.hasPort ? ':${p.port}' : ''}';
+    }
+  } catch (_) {}
   u = u.replaceFirst(RegExp(r'/(rest|auth)/v1.*$'), '');
   return u.replaceAll(RegExp(r'/+$'), '');
 }
@@ -3244,7 +3257,7 @@ class D {
       g['progress'] ??= 0;
       g['deadline'] ??= ds(DateTime.now());
     }
-    prefs.setInt('ver', kVer);
+    prefs.setInt('ver', kDataVer);
   }
 
   static Future<void> save() async {
@@ -3258,7 +3271,7 @@ class D {
 
   static String backup() => jsonEncode({
         'app': 'Konj Planner',
-        'ver': kVer,
+        'ver': kDataVer,
         'tasks': tasks,
         'events': events,
         'txs': txs,
