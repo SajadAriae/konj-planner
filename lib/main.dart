@@ -5,7 +5,6 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/scheduler.dart' show Ticker;
-import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,7 +15,7 @@ import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
 
 // ───────────────────────── تنظیمات و ثابت‌ها ─────────────────────────
-const kDataVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
+const kVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
 final notif = FlutterLocalNotificationsPlugin();
 late SharedPreferences prefs;
 final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/حالت تیره) زیاد می‌شود
@@ -166,10 +165,10 @@ const gItems = [
   GItem('fd_steak', 'استیک', '🥩', 'food', price: 22, xp: 38, love: 'steak'),
   GItem('fd_cake', 'کیک', '🍰', 'food', price: 45, xp: 70),
   GItem('fd_feast', 'سفره‌ی ویژه', '🍲', 'food', price: 90, xp: 150),
-  GItem('sf_pumpkin', 'کدو حلوایی', '🎃', 'food', price: 40, xp: 130),
-  GItem('sf_melon', 'هندوانه', '🍉', 'food', price: 40, xp: 130),
-  GItem('sf_grape', 'انگور', '🍇', 'food', price: 40, xp: 130),
-  GItem('sf_ice', 'بستنی', '🍦', 'food', price: 40, xp: 130),
+  GItem('sf_pumpkin', 'کدو حلوایی', '🎃', 'food', price: 120, xp: 70),
+  GItem('sf_melon', 'هندوانه', '🍉', 'food', price: 120, xp: 70),
+  GItem('sf_grape', 'انگور', '🍇', 'food', price: 120, xp: 70),
+  GItem('sf_ice', 'بستنی', '🍦', 'food', price: 120, xp: 70),
   GItem('h_cap', 'کپ', '🧢', 'hat', price: 30),
   GItem('h_straw', 'کلاه حصیری', '👒', 'hat', price: 50),
   GItem('h_top', 'کلاه سیلندر', '🎩', 'hat', price: 60),
@@ -235,6 +234,12 @@ Map<String, dynamic> readMoods() {
   } catch (_) {
     return {};
   }
+}
+
+String focusRewardText(int min) {
+  final fs = Gm.focusFood(min);
+  if (fs.isEmpty) return 'کمتر از ۱۰ دقیقه جایزه نداره';
+  return fs.map((f) => '${itemById(f)?.emoji ?? ''} ${itemById(f)?.name ?? ''}').join('، ');
 }
 
 int focusCoins(int min) => (min * 0.4).round();
@@ -327,6 +332,12 @@ class Gm {
     checkSpecials();
   }
 
+  static void gain(int c, String why, {bool silent = false}) {
+    coins += c;
+    save();
+    if (!silent) say('+$c سکه 🪙 ($why)');
+  }
+
   static void earn(int c, int x, [String? msg]) {
     coins += c;
     addXp(x);
@@ -352,14 +363,14 @@ class Gm {
     if (k['rw'] == true) return;
     k['rw'] = true;
     final c = k['star'] == true ? 8 : 5;
-    earn(c, c * 2, '+$c سکه 🪙');
+    earn(c, c * 2, '+$c سکه 🪙 (انجام کار)');
     Mn.inc('tasks');
   }
 
   static void habitDone(Map h, String day) {
     final key = 'h:${h['id']}:$day';
     if (!rw.add(key)) return;
-    earn(4, 8, '+۴ سکه 🪙');
+    earn(4, 8, '+۴ سکه 🪙 (عادت)');
     Mn.inc('habits');
     final s = streakG(h);
     const ms = {7: 40, 14: 80, 30: 200, 60: 400, 100: 800, 365: 3000};
@@ -377,24 +388,54 @@ class Gm {
 
   static void goalDone(Map g) {
     if (!rw.add('g:${g['id']}')) return;
-    coins += 150;
-    addXp(100);
-    say('🏁 به هدف «${g['t']}» رسیدی!\nجایزه: ۱۵۰ سکه و ۱۰۰ تجربه', true);
+    final nowUs = DateTime.now().microsecondsSinceEpoch;
+    final ageDays = (nowUs - ((g['id'] as num?)?.toInt() ?? nowUs)) / 86400000000;
+    final wk = 'gw:${Mn.weekKey()}';
+    final cnt = prefs.getInt(wk) ?? 0;
+    final subs = ((g['subs'] as List?) ?? []).length;
+    var c = 60 + math.min(subs, 5) * 15;
+    var note = '';
+    if (ageDays < 3) {
+      c = 10;
+      note = '\n(هدف خیلی زود تموم شد؛ برای پاداش کامل باید حداقل ۳ روز از ساختنش بگذره)';
+    } else if (cnt >= 2) {
+      c = 10;
+      note = '\n(پاداش کامل هدف، هفته‌ای ۲ بار است)';
+    } else {
+      prefs.setInt(wk, cnt + 1);
+    }
+    coins += c;
+    addXp(ageDays < 3 ? 10 : 100);
+    say('🏁 به هدف «${g['t']}» رسیدی!\nجایزه: +$c سکه 🪙$note', true);
     checkSpecials();
     save();
   }
 
+  // جایزه‌ی تمرکز: غذا (نه سکه) تا سوءاستفاده کم بشه
+  static List<String> focusFood(int el) {
+    if (el < 10) return [];
+    final love = heroes.isEmpty ? 'fd_fish' : (gItems.where((i) => i.slot == 'food' && i.love == animalById('${heroes[active]['a']}').love).firstOrNull?.id ?? 'fd_fish');
+    if (el < 15) return ['fd_apple'];
+    if (el < 25) return [love];
+    if (el < 40) return [love, 'fd_apple'];
+    if (el < 50) return ['fd_cake'];
+    return ['fd_feast'];
+  }
+
   static void focusDone(int min) {
     focusTotal += min;
-    final dk = 'fd:${ds(DateTime.now())}';
-    prefs.setInt(dk, (prefs.getInt(dk) ?? 0) + min);
+    final day = ds(DateTime.now());
+    prefs.setInt('fd:$day', (prefs.getInt('fd:$day') ?? 0) + min);
     final comp = heroes.isNotEmpty && heroes[active]['hatched'] != false && sat(heroes[active]) >= 25;
-    final rk = 'fr:${ds(DateTime.now())}';
+    final rk = 'fr:$day';
     final used = prefs.getInt(rk) ?? 0;
     final el = math.max(0, math.min(min, 180 - used));
     prefs.setInt(rk, used + el);
-    final c = focusCoins(el) + (comp ? (focusCoins(el) * .25).round() : 0);
-    coins += c;
+    final fs = focusFood(el);
+    if (comp && fs.isNotEmpty) fs.add('fd_apple');
+    for (final f in fs) {
+      inv[f] = (inv[f] ?? 0) + 1;
+    }
     Mn.inc('focusMin', min);
     Mn.inc('focusN');
     final hr = DateTime.now().subtract(Duration(minutes: min)).hour;
@@ -405,7 +446,8 @@ class Gm {
     fh['$hr'] = ((fh['$hr'] as int?) ?? 0) + min;
     prefs.setString('fh', jsonEncode(fh));
     addXp(el);
-    say('🧠 $min دقیقه تمرکز کامل شد!\n+$c سکه${comp ? ' (با پاداش پت همراه)' : ''} و +$el تجربه${el < min ? '\n(سقف پاداش روزانه‌ی تمرکز ۱۸۰ دقیقه است)' : ''}', true);
+    final names = fs.map((f) => '${itemById(f)?.emoji ?? ''} ${itemById(f)?.name ?? ''}').join('، ');
+    say('🧠 $min دقیقه تمرکز کامل شد!\n🎁 جایزه: ${fs.isEmpty ? 'سقف امروز پر شده' : names}${comp && fs.isNotEmpty ? ' (با پاداش پت همراه)' : ''}\n+$el تجربه${el < min ? '\n(سقف پاداش روزانه‌ی تمرکز ۱۸۰ دقیقه است)' : ''}', true);
     checkSpecials();
     save();
   }
@@ -527,6 +569,11 @@ int _shade(int c, double f) {
     return _rgb2(_cl(r + (255 - r) * t), _cl(g + (255 - g) * t), _cl(b + (255 - b) * t));
   }
   return _rgb2(_cl(r * f), _cl(g * f), _cl(b * f));
+}
+
+int _mix(int a, int b, double t) {
+  int ch(int sh) => ((((a >> sh) & 255) * (1 - t) + ((b >> sh) & 255) * t)).round();
+  return _rgb2(ch(16), ch(8), ch(0));
 }
 
 List<int> _tones(int c) => [_shade(c, 1.3), c, _shade(c, .68)];
@@ -851,7 +898,7 @@ PetSprite _buildPet(String sp, int stage, String face, int rar, int col) {
     for (final sd in [-1, 1]) {
       final x0 = bcx + sd * brx * .55;
       px.tri(x0, bcy - bry * .1, x0 + sd * 12 * wk, bcy - bry - 11 * wk, x0 + sd * 13 * wk, bcy + 1 * wk, acc);
-      px.tri(x0 + sd * 1.5 * wk, bcy - bry * .1, x0 + sd * 9.5 * wk, bcy - bry - 7 * wk, x0 + sd * 10 * wk, bcy - 1 * wk, _tones(0xFF7BD88F));
+      px.tri(x0 + sd * 1.5 * wk, bcy - bry * .1, x0 + sd * 9.5 * wk, bcy - bry - 7 * wk, x0 + sd * 10 * wk, bcy - 1 * wk, _tones(_mix(pc[0], 0xFFFFFFFF, .35)));
     }
   }
   if (stage == 4 && sp != 'dragon') {
@@ -901,7 +948,7 @@ PetSprite _buildPet(String sp, int stage, String face, int rar, int col) {
     }
     if (sp == 'crow') {
       for (final sd in [-1, 1]) {
-        px.ell(bcx + sd * brx * .72, bcy, brx * .42, bry * .8, _tones(0xFF4A4A68));
+        px.ell(bcx + sd * brx * .72, bcy, brx * .42, bry * .8, _tones(_mix(pc[0], pc[2], .5)));
       }
     }
     if (sp == 'wolf') {
@@ -948,7 +995,7 @@ PetSprite _buildPet(String sp, int stage, String face, int rar, int col) {
     }
   }
   if (sp == 'dragon') {
-    px.ell(hcx, hcy + hry * .42, hrx * .52, hry * .38, _tones(0xFF8FE0A0), onlyOn: true);
+    px.ell(hcx, hcy + hry * .42, hrx * .52, hry * .38, _tones(_mix(pc[0], 0xFFFFFFFF, .45)), onlyOn: true);
     for (final sd in [-1, 1]) {
       px.set((hcx + sd * hrx * .2).round(), (hcy + hry * .35).round(), acc[2]);
     }
@@ -1100,7 +1147,7 @@ Widget petCanvas(Map h, {double size = 200, String face = 'idle', double bob = 0
     return Positioned(left: cx * cell - sz / 2, top: cy * cell - sz / 2, width: sz, height: sz, child: PxEmoji(it.emoji, sz));
   }
 
-  final hatW = spr.hrx * 1.5, faceW = spr.hrx * 1.45;
+  final hatW = spr.hrx * 1.5, faceW = spr.hrx * 1.15;
   return SizedBox(
       width: size,
       height: size,
@@ -1109,8 +1156,8 @@ Widget petCanvas(Map h, {double size = 200, String face = 'idle', double bob = 0
           child: Stack(clipBehavior: Clip.none, children: [
             item('back', spr.bx - spr.brx * .95, spr.by - spr.bry * .2, spr.brx * 1.7),
             Positioned.fill(child: PxView(spr.px)),
-            item('neck', spr.hx, spr.hy + spr.hry * .95, spr.brx * 1.05),
-            item('face', spr.hx, spr.ey + .6, faceW),
+            item('neck', spr.hx, spr.hy + spr.hry * .98 + spr.hrx * .3, spr.hrx * .85),
+            item('face', spr.hx, spr.ey + .9, faceW),
             item('hat', spr.hx, spr.hy - spr.hry * .95 - hatW * .12, hatW),
             item('hand', spr.bx + spr.brx * 1.1, spr.by + spr.bry * .15, spr.brx * 1.3),
           ])));
@@ -1781,7 +1828,7 @@ class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMix
     if (score > 0) {
       final c = math.min(25, score);
       result = 'امتیاز: $score\nجایزه: $c سکه 🪙';
-      Gm.earn(c, (score / 2).round());
+      Gm.earn(c, (score / 2).round(), '+$c سکه 🪙 (مینی‌بازی)');
     } else {
       result = 'امتیاز: $score\nاین بار نشد؛ دفعه‌ی بعد!';
     }
@@ -1856,6 +1903,21 @@ class _CatchGameState extends State<CatchGame> with SingleTickerProviderStateMix
 }
 
 // ───────────────────────── میز کار آنلاین (Supabase) ─────────────────────────
+// پاداشی که مدیر برای کار تعیین کرده؛ فقط یک بار برای هر کار و برای کاری که خودت ساختی نیست؛ سقف روزانه ۱۵۰ سکه
+int wsReward(Map t) {
+  final r = (t['reward'] as num?)?.toInt() ?? 0;
+  if (r <= 0 || '${t['created_by']}' == Sb.uid) return 0;
+  if (!Gm.rw.add('wr:${t['id']}')) return 0;
+  final day = ds(DateTime.now());
+  final used = prefs.getInt('wrd:$day') ?? 0;
+  final c = math.max(0, math.min(r, 150 - used));
+  if (c <= 0) return 0;
+  prefs.setInt('wrd:$day', used + c);
+  Gm.coins += c;
+  Gm.save();
+  return c;
+}
+
 String cleanText(String s) => s.replaceAll(RegExp(r'[\u200B-\u200F\u202A-\u202E\u2060\uFEFF\u00A0]'), ' ').trim();
 
 String cleanKey(String s) {
@@ -1868,18 +1930,6 @@ String cleanUrl(String s) {
   var u = cleanKey(s);
   if (u.isEmpty) return u;
   if (!u.toLowerCase().startsWith('http')) u = 'https://$u';
-  try {
-    final p = Uri.parse(u);
-    if (p.host.isNotEmpty) {
-      // لینک داشبورد (supabase.com/dashboard/project/<ref>/...) → آدرس خود پروژه
-      if (p.host == 'supabase.com' || p.host == 'www.supabase.com' || p.host == 'app.supabase.com') {
-        final m = RegExp(r'/project/([a-z0-9]+)').firstMatch(p.path);
-        if (m != null) return 'https://${m.group(1)}.supabase.co';
-      }
-      // هر مسیر اضافه (/rest/v1، /auth/v1 و ...) حذف می‌شود
-      return '${p.scheme}://${p.host}${p.hasPort ? ':${p.port}' : ''}';
-    }
-  } catch (_) {}
   u = u.replaceFirst(RegExp(r'/(rest|auth)/v1.*$'), '');
   return u.replaceAll(RegExp(r'/+$'), '');
 }
@@ -1904,6 +1954,7 @@ String faErr(Object e) {
   if (l.contains('socketexception') || l.contains('failed host lookup') || l.contains('timeoutexception') || l.contains('handshake') || l.contains('connection')) return 'اتصال برقرار نشد؛ اینترنت یا آدرس پروژه رو چک کن (ممکنه به VPN نیاز باشه).';
   if (l.contains('formatexception')) return 'پاسخ سرور قابل خواندن نبود؛ آدرس پروژه رو چک کن.';
   if (l.contains('does not exist') && l.contains('relation')) return 'جدول‌ها ساخته نشدن؛ فایل supabase_setup.sql رو توی SQL Editor اجرا کن.';
+  if (l.contains('could not find the table') || l.contains('schema cache')) return 'این بخش توی دیتابیس هنوز ساخته نشده. فایل supabase_setup.sql (نسخه‌ی جدید) رو دوباره توی Supabase ← SQL Editor اجرا کن و بعد دوباره امتحان کن.';
   if (l.contains('could not find the function')) return 'تابع‌های دیتابیس ساخته نشدن؛ فایل supabase_setup.sql رو اجرا کن.';
   return m;
 }
@@ -2012,6 +2063,65 @@ class Sb {
     } finally {
       client.close();
     }
+  }
+
+  static List<String> asg(Map t) {
+    final a = t['assignees'];
+    if (a is List && a.isNotEmpty) return [for (final e in a) '$e'];
+    return t['assignee'] == null ? <String>[] : ['${t['assignee']}'];
+  }
+
+  static List<String> doneBy(Map t) => [for (final e in ((t['done_by'] as List?) ?? [])) '$e'];
+  static bool myDone(Map t) => '${t['status']}' == 'done' || doneBy(t).contains(uid);
+
+  static Future<Map<String, dynamic>?> getTask(String id) async {
+    final l = rows(await req('GET', '/rest/v1/tasks', q: {'id': 'eq.$id', 'select': '*'}));
+    return l.isEmpty ? null : Map<String, dynamic>.from(l.first);
+  }
+
+  // تیک زدن یا برداشتن بخشِ خودم از کار (کار وقتی کامل می‌شه که همه‌ی مسئول‌ها انجامش بدن)
+  static Future<void> markMine(Map t, bool done) async {
+    final a = asg(t);
+    final d = doneBy(t).where((x) => x != uid).toList();
+    if (done) d.add(uid);
+    final all = a.isNotEmpty && a.every(d.contains);
+    final st = all ? 'done' : (d.isNotEmpty ? 'doing' : 'todo');
+    await req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${t['id']}'}, body: {'done_by': d, 'status': st, 'updated_at': DateTime.now().toUtc().toIso8601String()});
+    await req('POST', '/rest/v1/reports', body: {
+      'task_id': t['id'],
+      'workspace_id': t['workspace_id'],
+      'name': name,
+      'kind': 'status',
+      'text': done ? '$name بخش خودش رو انجام داد${all ? ' (کار کامل شد ✓)' : ''}' : '$name تیک انجام رو برداشت'
+    });
+  }
+
+  static Future<void> upload(String path, String mime, List<int> bytes) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final r = await client.postUrl(Uri.parse('$url/storage/v1/object/attachments/$path'));
+      r.headers.set('apikey', key);
+      r.headers.set('Authorization', 'Bearer $token');
+      r.headers.set('Content-Type', mime);
+      r.add(bytes);
+      final res = await r.close().timeout(const Duration(seconds: 90));
+      final text = await res.transform(utf8.decoder).join();
+      if (res.statusCode >= 400) {
+        var m = text;
+        try {
+          m = '${jsonDecode(text)['message'] ?? text}';
+        } catch (_) {}
+        throw Exception(m);
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  static Future<String> signedUrl(String path) async {
+    final j = await req('POST', '/storage/v1/object/sign/attachments/$path', body: {'expiresIn': 3600}) as Map;
+    final u = '${j['signedURL'] ?? j['signedUrl']}';
+    return u.startsWith('http') ? u : '$url/storage/v1${u.startsWith('/') ? '' : '/'}$u';
   }
 
   static Future<void> backupNow() async {
@@ -2283,13 +2393,15 @@ class _WsPageState extends State<WsPage> {
   }
 
   void snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
   DateTime get _weekStart {
     final n = DateTime.now();
     return DateTime(n.year, n.month, n.day - ((n.weekday + 1) % 7));
   }
 
   int _doneIn(dynamic uid, DateTime a, DateTime b) => tasks.where((t) {
-        if (t['assignee'] != uid || t['status'] != 'done') return false;
+        final mineDone = Sb.doneBy(t).contains('$uid') || ('${t['status']}' == 'done' && Sb.asg(t).contains('$uid'));
+        if (!mineDone) return false;
         final u = DateTime.tryParse('${t['updated_at']}')?.toLocal();
         return u != null && !u.isBefore(a) && u.isBefore(b);
       }).length;
@@ -2301,14 +2413,14 @@ class _WsPageState extends State<WsPage> {
     return [
       for (var i = 0; i < list.length; i++)
         Builder(builder: (_) {
-          final m = list[i], id = m['user_id'];
+          final m = list[i], id = '${m['user_id']}';
           final dw = _doneIn(id, ws0, end);
-          final op = tasks.where((t) => t['assignee'] == id && t['status'] != 'done').length;
-          final od = tasks.where((t) => t['assignee'] == id && t['status'] != 'done' && t['due'] != null && '${t['due']}'.compareTo(today) < 0).length;
+          final open = tasks.where((t) => Sb.asg(t).contains(id) && !Sb.doneBy(t).contains(id) && '${t['status']}' != 'done').toList();
+          final od = open.where((t) => t['due'] != null && '${t['due']}'.compareTo(today) < 0).length;
           return ListTile(
               leading: Text(i < 3 && dw > 0 ? const ['🥇', '🥈', '🥉'][i] : '👤', style: const TextStyle(fontSize: 24)),
               title: Text('${m['name']} • ${roleLabel['${m['role']}'] ?? ''}'),
-              subtitle: Text('این هفته: $dw انجام‌شده • باز: $op • دیرکرد: $od', style: TextStyle(color: od > 0 ? Colors.red : null)),
+              subtitle: Text('این هفته: $dw انجام‌شده • باز: ${open.length} • دیرکرد: $od', style: TextStyle(color: od > 0 ? Colors.red : null)),
               trailing: boss && id != Sb.uid
                   ? PopupMenuButton<String>(
                       onSelected: (v) => _act(() async {
@@ -2343,7 +2455,7 @@ class _WsPageState extends State<WsPage> {
     if (top == Sb.uid && best > 0 && Gm.rw.add('wk:$wid:${ds(ws0)}')) {
       Gm.coins += 100;
       Gm.save();
-      Gm.say('🏆 هفته‌ی پیش برترین عضو میزکار بودی با $best کار!\nجایزه: ۱۰۰ سکه', true);
+      Gm.say('🏆 هفته‌ی پیش برترین عضو میزکار بودی با $best کار!\nجایزه: +100 سکه 🪙 (میز کار)', true);
     }
   }
 
@@ -2361,64 +2473,136 @@ class _WsPageState extends State<WsPage> {
   Future<void> _addProject() async {
     final t = await askText(context, 'عنوان پروژه');
     if (t == null || t.isEmpty) return;
-    await _act(() => Sb.req('POST', '/rest/v1/projects', body: {'workspace_id': wid, 'title': t}));
+    await _act(() => Sb.req('POST', '/rest/v1/projects', body: {'workspace_id': wid, 'title': cleanText(t)}));
   }
 
-  Future<void> _addTask(Map p) async {
-    final title = TextEditingController(), desc = TextEditingController();
-    String? who;
-    DateTime? due;
+  // فرم ساخت و ویرایش کار (فقط مدیر/سرپرست)
+  Future<void> _taskForm({Map? edit, Map? project}) async {
+    final title = TextEditingController(text: '${edit?['title'] ?? ''}');
+    final desc = TextEditingController(text: '${edit?['descr'] ?? ''}');
+    final reward = TextEditingController(text: edit?['reward'] == null || edit?['reward'] == 0 ? '' : '${edit?['reward']}');
+    final sel = <String>{...(edit == null ? <String>[] : Sb.asg(edit))};
+    DateTime? due = edit?['due'] != null ? DateTime.tryParse('${edit!['due']}') : null;
+    final subs = <_Sub>[for (final x in ((edit?['subs'] as List?) ?? [])) _Sub('${x['t']}', x['done'] == true)];
     await showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         builder: (ctx) => StatefulBuilder(
-            builder: (ctx, set) => Padding(
-                padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
-                child: SingleChildScrollView(
-                    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                  Text('کار جدید در «${p['title']}»', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  TextField(controller: title, autofocus: true, decoration: const InputDecoration(labelText: 'عنوان کار')),
-                  TextField(controller: desc, maxLines: 3, minLines: 1, decoration: const InputDecoration(labelText: 'توضیحات')),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                      value: who,
-                      decoration: const InputDecoration(labelText: 'مسئول انجام'),
-                      items: [for (final m in members) DropdownMenuItem(value: '${m['user_id']}', child: Text('${m['name']}'))],
-                      onChanged: (v) => set(() => who = v)),
-                  ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.event),
-                      title: Text(due == null ? 'مهلت (اختیاری)' : 'مهلت: ${fd(ds(due!))}'),
-                      onTap: () async {
-                        final d = await pickDate(ctx, initial: due ?? DateTime.now(), help: 'مهلت انجام');
-                        if (d != null) set(() => due = d);
-                      }),
-                  FilledButton(
-                      onPressed: () {
-                        if (title.text.trim().isEmpty) return;
-                        Navigator.pop(ctx);
-                        _act(() => Sb.req('POST', '/rest/v1/tasks', body: {'project_id': p['id'], 'workspace_id': wid, 'title': title.text.trim(), 'descr': desc.text.trim(), 'assignee': who, 'due': due == null ? null : ds(due!)}));
-                      },
-                      child: const Text('ثبت کار')),
-                ])))));
+            builder: (ctx, set) => SafeArea(
+                child: Padding(
+                    padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+                    child: SingleChildScrollView(
+                        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                      Text(edit == null ? 'کار جدید در «${project?['title']}»' : 'ویرایش کار', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      TextField(controller: title, autofocus: edit == null, decoration: const InputDecoration(labelText: 'عنوان کار')),
+                      TextField(controller: desc, maxLines: 3, minLines: 1, decoration: const InputDecoration(labelText: 'توضیحات')),
+                      const Padding(padding: EdgeInsets.only(top: 10), child: Text('مسئول‌ها (می‌تونی چند نفر انتخاب کنی)', style: TextStyle(fontSize: 12))),
+                      Wrap(spacing: 6, children: [
+                        for (final m in members)
+                          FilterChip(
+                              label: Text('${m['name']}'),
+                              selected: sel.contains('${m['user_id']}'),
+                              onSelected: (v) => set(() => v ? sel.add('${m['user_id']}') : sel.remove('${m['user_id']}'))),
+                      ]),
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.event),
+                          title: Text(due == null ? 'مهلت (اختیاری)' : 'مهلت: ${fd(ds(due!))}'),
+                          trailing: due == null ? null : IconButton(icon: const Icon(Icons.close), onPressed: () => set(() => due = null)),
+                          onTap: () async {
+                            final d = await pickDate(ctx, initial: due ?? DateTime.now(), help: 'مهلت انجام');
+                            if (d != null) set(() => due = d);
+                          }),
+                      TextField(controller: reward, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'جایزه‌ی سکه برای انجام (۰ تا ۱۰۰)', prefixIcon: Icon(Icons.monetization_on_outlined))),
+                      const Padding(padding: EdgeInsets.only(top: 10), child: Text('زیرمجموعه‌ها', style: TextStyle(fontSize: 12))),
+                      for (var i = 0; i < subs.length; i++)
+                        Row(children: [
+                          Expanded(child: TextField(controller: subs[i].c, decoration: InputDecoration(hintText: 'زیرمجموعه ${i + 1}', isDense: true))),
+                          IconButton(icon: const Icon(Icons.close), onPressed: () => set(() => subs.removeAt(i))),
+                        ]),
+                      Align(alignment: AlignmentDirectional.centerStart, child: TextButton.icon(icon: const Icon(Icons.add), label: const Text('افزودن زیرمجموعه'), onPressed: () => set(() => subs.add(_Sub('', false))))),
+                      FilledButton(
+                          onPressed: () {
+                            final tt = cleanText(title.text);
+                            if (tt.isEmpty) return;
+                            Navigator.pop(ctx);
+                            final rw = math.max(0, math.min(100, parseAmt(reward.text) ?? 0));
+                            final sl = sel.toList();
+                            final body = <String, dynamic>{
+                              'title': tt,
+                              'descr': cleanText(desc.text),
+                              'assignees': sl,
+                              'assignee': sl.isEmpty ? null : sl.first,
+                              'due': due == null ? null : ds(due!),
+                              'reward': rw,
+                              'subs': [
+                                for (final x in subs)
+                                  if (cleanText(x.c.text).isNotEmpty) {'t': cleanText(x.c.text), 'done': x.done}
+                              ],
+                            };
+                            if (edit == null) {
+                              _act(() => Sb.req('POST', '/rest/v1/tasks', body: {...body, 'project_id': project!['id'], 'workspace_id': wid}));
+                            } else {
+                              final d = Sb.doneBy(edit).where(sl.contains).toList();
+                              final all = sl.isNotEmpty && sl.every(d.contains);
+                              body['done_by'] = d;
+                              body['status'] = all ? 'done' : (d.isNotEmpty ? 'doing' : 'todo');
+                              body['updated_at'] = DateTime.now().toUtc().toIso8601String();
+                              _act(() => Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${edit['id']}'}, body: body));
+                            }
+                          },
+                          child: Text(edit == null ? 'ثبت کار' : 'ذخیره‌ی تغییرات')),
+                    ]))))));
   }
 
-  Future<void> _setStatus(Map t, String st) async {
+  Future<void> _toggleMine(Map t, bool done) async {
     await _act(() async {
-      await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${t['id']}'}, body: {'status': st, 'updated_at': DateTime.now().toUtc().toIso8601String()});
-      await Sb.req('POST', '/rest/v1/reports', body: {'task_id': t['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'status', 'text': 'وضعیت: ${stLabel[st]}'});
+      await Sb.markMine(t, done);
+      if (done) {
+        final c = wsReward(t);
+        if (c > 0) {
+          sfx('done');
+          Gm.say('+$c سکه 🪙 (پاداش وظیفه‌ی میز کار)', true);
+        }
+        Mn.inc('tasks');
+      }
     });
   }
 
-  void _taskSheet(Map t) {
+  Future<void> _attach(Map t, VoidCallback refresh) async {
+    try {
+      final r = await shakeCh.invokeMethod<Map>('pickFile');
+      if (r == null) return;
+      if (r['error'] != null) {
+        snack('فایل باید کوچک‌تر از ۵ مگابایت باشه');
+        return;
+      }
+      final nm = '${r['name']}';
+      final bytes = base64Decode('${r['b64']}');
+      final path = '$wid/${t['id']}/${DateTime.now().millisecondsSinceEpoch}_${nm.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')}';
+      snack('در حال بارگذاری فایل…');
+      await _act(() async {
+        await Sb.upload(path, '${r['mime']}', bytes);
+        await Sb.req('POST', '/rest/v1/reports', body: {'task_id': t['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'file', 'text': nm, 'path': path});
+      });
+      refresh();
+    } catch (e) {
+      snack(faErr(e));
+    }
+  }
+
+  void _taskSheet(Map t0) {
     var reload = 0;
-    final mine = t['assignee'] == Sb.uid;
     showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
-              final cur = tasks.where((x) => x['id'] == t['id']).firstOrNull ?? t;
+              final cur = tasks.where((x) => x['id'] == t0['id']).firstOrNull ?? t0;
               final st = '${cur['status']}';
+              final asg = Sb.asg(cur), dby = Sb.doneBy(cur);
+              final mine = asg.contains(Sb.uid);
+              final subs = [for (final x in ((cur['subs'] as List?) ?? [])) Map<String, dynamic>.from(x as Map)];
+              final rw = (cur['reward'] as num?)?.toInt() ?? 0;
               return SafeArea(
                   child: Padding(
                       padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
@@ -2427,54 +2611,98 @@ class _WsPageState extends State<WsPage> {
                         Text('${cur['title']}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
                         if ('${cur['descr'] ?? ''}'.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 4), child: Text('${cur['descr']}')),
                         const SizedBox(height: 8),
-                        Wrap(spacing: 6, children: [
+                        Wrap(spacing: 6, runSpacing: 4, children: [
                           Chip(label: Text(stLabel[st] ?? st), backgroundColor: (stColor[st] ?? Colors.grey).withOpacity(.2)),
-                          Chip(avatar: const Icon(Icons.person, size: 16), label: Text(nameOf(cur['assignee']))),
                           if (cur['due'] != null) Chip(avatar: const Icon(Icons.event, size: 16), label: Text(fd('${cur['due']}'))),
+                          if (rw > 0) Chip(label: Text('🪙 جایزه: $rw سکه')),
+                          for (final u in asg) Chip(avatar: Icon(dby.contains(u) || st == 'done' ? Icons.check_circle : Icons.radio_button_unchecked, size: 18, color: dby.contains(u) ? Colors.green : null), label: Text(nameOf(u))),
+                          if (asg.isEmpty) const Chip(label: Text('بدون مسئول')),
                         ]),
-                        if (mine || mgr)
-                          Wrap(spacing: 8, children: [
-                            if (st != 'doing') OutlinedButton(onPressed: () async { await _setStatus(cur, 'doing'); set(() => reload++); }, child: const Text('در حال انجام')),
-                            if (st != 'done') FilledButton(onPressed: () async { await _setStatus(cur, 'done'); set(() => reload++); }, child: const Text('✓ انجام شد')),
-                            if (st == 'done') OutlinedButton(onPressed: () async { await _setStatus(cur, 'todo'); set(() => reload++); }, child: const Text('برگشت به انجام‌نشده')),
+                        if (subs.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text('زیرمجموعه‌ها (${subs.where((e) => e['done'] == true).length} از ${subs.length})', style: const TextStyle(fontWeight: FontWeight.bold)),
+                          for (var i = 0; i < subs.length; i++)
+                            CheckboxListTile(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                controlAffinity: ListTileControlAffinity.leading,
+                                value: subs[i]['done'] == true,
+                                title: Text('${subs[i]['t']}', style: subs[i]['done'] == true ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
+                                onChanged: (mine || mgr)
+                                    ? (v) async {
+                                        subs[i]['done'] = v == true;
+                                        await _act(() => Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}, body: {'subs': subs, 'updated_at': DateTime.now().toUtc().toIso8601String()}));
+                                        set(() => reload++);
+                                      }
+                                    : null),
+                        ],
+                        const SizedBox(height: 6),
+                        Wrap(spacing: 8, children: [
+                          if (mine)
+                            dby.contains(Sb.uid)
+                                ? OutlinedButton(onPressed: () async { await _toggleMine(cur, false); set(() => reload++); }, child: const Text('برداشتن تیک من'))
+                                : FilledButton(onPressed: () async { await _toggleMine(cur, true); set(() => reload++); }, child: const Text('✓ بخش من انجام شد')),
+                          OutlinedButton(
+                              onPressed: () async {
+                                final txt = await askText(ctx, 'گزارش کار', lines: 4);
+                                if (txt == null || txt.isEmpty) return;
+                                await _act(() => Sb.req('POST', '/rest/v1/reports', body: {'task_id': cur['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'report', 'text': txt}));
+                                set(() => reload++);
+                              },
+                              child: const Text('ثبت گزارش')),
+                          OutlinedButton(onPressed: () => _attach(cur, () => set(() => reload++)), child: const Text('📎 پیوست فایل')),
+                          if (mine)
                             OutlinedButton(
                                 onPressed: () async {
-                                  final txt = await askText(ctx, 'گزارش کار', lines: 4);
-                                  if (txt == null || txt.isEmpty) return;
-                                  await _act(() => Sb.req('POST', '/rest/v1/reports', body: {'task_id': cur['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'report', 'text': txt}));
-                                  set(() => reload++);
-                                },
-                                child: const Text('ثبت گزارش')),
-                            OutlinedButton(
-                                onPressed: () async {
-                                  final others = members.where((m) => m['user_id'] != cur['assignee']).toList();
-                                  final pick = await showDialog<Map>(
-                                      context: ctx,
-                                      builder: (dc) => SimpleDialog(title: const Text('ارجاع به'), children: [for (final m in others) SimpleDialogOption(onPressed: () => Navigator.pop(dc, m), child: Text('${m['name']}'))]));
+                                  final others = members.where((m) => !asg.contains('${m['user_id']}')).toList();
+                                  if (others.isEmpty) {
+                                    snack('عضو دیگه‌ای برای ارجاع نیست');
+                                    return;
+                                  }
+                                  final pick = await showDialog<Map>(context: ctx, builder: (dc) => SimpleDialog(title: const Text('ارجاع به'), children: [for (final m in others) SimpleDialogOption(onPressed: () => Navigator.pop(dc, m), child: Text('${m['name']}'))]));
                                   if (pick == null) return;
                                   final note = await askText(ctx, 'توضیح ارجاع (اختیاری)');
+                                  final na = [...asg.where((x) => x != Sb.uid), '${pick['user_id']}'];
+                                  final nd2 = dby.where((x) => x != Sb.uid).toList();
                                   await _act(() async {
-                                    await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}, body: {'assignee': pick['user_id'], 'status': 'todo', 'updated_at': DateTime.now().toUtc().toIso8601String()});
-                                    await Sb.req('POST', '/rest/v1/reports', body: {'task_id': cur['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'refer', 'text': 'ارجاع به ${pick['name']}${(note ?? '').isEmpty ? '' : ': $note'}'});
+                                    await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}, body: {'assignees': na, 'assignee': na.first, 'done_by': nd2, 'status': nd2.isEmpty ? 'todo' : 'doing', 'updated_at': DateTime.now().toUtc().toIso8601String()});
+                                    await Sb.req('POST', '/rest/v1/reports', body: {'task_id': cur['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'refer', 'text': '${Sb.name} کار رو به ${pick['name']} ارجاع داد${(note ?? '').isEmpty ? '' : ': $note'}'});
                                   });
                                   set(() => reload++);
                                 },
                                 child: const Text('ارجاع')),
-                            if (mgr)
-                              TextButton(
+                          if (mgr) ...[
+                            OutlinedButton(
+                                onPressed: () {
+                                  Navigator.pop(ctx);
+                                  _taskForm(edit: cur);
+                                },
+                                child: const Text('✏️ ویرایش')),
+                            if (st != 'done')
+                              OutlinedButton(
                                   onPressed: () async {
-                                    Navigator.pop(ctx);
-                                    await _act(() => Sb.req('DELETE', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}));
+                                    await _act(() async {
+                                      await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}, body: {'status': 'done', 'done_by': asg, 'updated_at': DateTime.now().toUtc().toIso8601String()});
+                                      await Sb.req('POST', '/rest/v1/reports', body: {'task_id': cur['id'], 'workspace_id': wid, 'name': Sb.name, 'kind': 'status', 'text': '${Sb.name} کار رو کامل‌شده اعلام کرد'});
+                                    });
+                                    set(() => reload++);
                                   },
-                                  child: const Text('حذف کار', style: TextStyle(color: Colors.red))),
-                          ]),
+                                  child: const Text('کامل شد (مدیر)')),
+                            TextButton(
+                                onPressed: () async {
+                                  Navigator.pop(ctx);
+                                  await _act(() => Sb.req('DELETE', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}));
+                                },
+                                child: const Text('حذف کار', style: TextStyle(color: Colors.red))),
+                          ],
+                        ]),
                         const Divider(),
-                        const Text('گزارش‌ها و تاریخچه', style: TextStyle(fontWeight: FontWeight.bold)),
+                        const Text('گزارش‌ها، فایل‌ها و تاریخچه', style: TextStyle(fontWeight: FontWeight.bold)),
                         FutureBuilder<dynamic>(
                             key: ValueKey(reload),
                             future: Sb.req('GET', '/rest/v1/reports', q: {'task_id': 'eq.${cur['id']}', 'order': 'created_at.asc'}),
                             builder: (c, snap) {
-                              if (snap.hasError) return Text('${snap.error}');
+                              if (snap.hasError) return Text(faErr(snap.error!));
                               if (!snap.hasData) return const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator());
                               final rs = Sb.rows(snap.data);
                               if (rs.isEmpty) return const Padding(padding: EdgeInsets.all(8), child: Text('هنوز گزارشی ثبت نشده.'));
@@ -2483,9 +2711,21 @@ class _WsPageState extends State<WsPage> {
                                   ListTile(
                                       dense: true,
                                       contentPadding: EdgeInsets.zero,
-                                      leading: Icon(r['kind'] == 'refer' ? Icons.redo : (r['kind'] == 'status' ? Icons.flag_outlined : Icons.description_outlined), size: 20),
-                                      title: Text('${r['text']}'),
-                                      subtitle: Text('${r['name']} • ${'${r['created_at']}'.substring(0, 10)}')),
+                                      leading: Icon(r['kind'] == 'refer' ? Icons.redo : (r['kind'] == 'status' ? Icons.flag_outlined : (r['kind'] == 'file' ? Icons.attach_file : Icons.description_outlined)), size: 20),
+                                      title: Text(r['kind'] == 'file' ? '📎 ${r['text']}' : '${r['text']}'),
+                                      subtitle: Text('${r['name']} • ${'${r['created_at']}'.substring(0, 10)}'),
+                                      trailing: r['kind'] == 'file' && r['path'] != null
+                                          ? IconButton(
+                                              icon: const Icon(Icons.download),
+                                              onPressed: () async {
+                                                try {
+                                                  final u = await Sb.signedUrl('${r['path']}');
+                                                  await shakeCh.invokeMethod('openUrl', u);
+                                                } catch (e) {
+                                                  snack(faErr(e));
+                                                }
+                                              })
+                                          : null),
                               ]);
                             }),
                       ]))));
@@ -2494,20 +2734,26 @@ class _WsPageState extends State<WsPage> {
 
   Widget _taskTile(Map t, {bool withProject = false}) {
     final st = '${t['status']}';
-    final mine = t['assignee'] == Sb.uid;
+    final asg = Sb.asg(t);
+    final mine = asg.contains(Sb.uid);
+    final subs = ((t['subs'] as List?) ?? []);
+    final sd = subs.where((e) => e['done'] == true).length;
+    final rw = (t['reward'] as num?)?.toInt() ?? 0;
+    final names = asg.take(3).map(nameOf).join('، ') + (asg.length > 3 ? ' +${asg.length - 3}' : '');
+    final done = Sb.myDone(t);
     return ListTile(
         dense: true,
-        leading: (mine || mgr)
-            ? Checkbox(value: st == 'done', onChanged: (v) => _setStatus(t, v == true ? 'done' : 'todo'))
+        leading: mine
+            ? Checkbox(value: done, onChanged: (v) => _toggleMine(t, v == true))
             : Icon(st == 'done' ? Icons.check_circle : Icons.radio_button_unchecked, color: stColor[st]),
         title: Text('${t['title']}', style: TextStyle(decoration: st == 'done' ? TextDecoration.lineThrough : null)),
-        subtitle: Text('${nameOf(t['assignee'])} • ${stLabel[st]}${t['due'] != null ? ' • ${fd('${t['due']}')}' : ''}${withProject ? ' • ${projects.where((p) => p['id'] == t['project_id']).map((p) => p['title']).firstOrNull ?? ''}' : ''}'),
+        subtitle: Text('${asg.isEmpty ? 'بدون مسئول' : names} • ${stLabel[st]}${t['due'] != null ? ' • ${fd('${t['due']}')}' : ''}${subs.isEmpty ? '' : ' • $sd/${subs.length} زیرمجموعه'}${rw > 0 ? ' • 🪙$rw' : ''}${withProject ? ' • ${projects.where((p) => p['id'] == t['project_id']).map((p) => p['title']).firstOrNull ?? ''}' : ''}'),
         onTap: () => _taskSheet(t));
   }
 
   @override
   Widget build(BuildContext context) {
-    final mine = tasks.where((t) => t['assignee'] == Sb.uid).toList()..sort((a, b) => ('${a['status']}' == 'done' ? 1 : 0).compareTo('${b['status']}' == 'done' ? 1 : 0));
+    final mine = tasks.where((t) => Sb.asg(t).contains(Sb.uid)).toList()..sort((a, b) => (Sb.myDone(a) ? 1 : 0).compareTo(Sb.myDone(b) ? 1 : 0));
     return DefaultTabController(
         length: 3,
         child: Scaffold(
@@ -2538,14 +2784,21 @@ class _WsPageState extends State<WsPage> {
                                           for (final t in pt) _taskTile(t),
                                           if (mgr)
                                             Row(children: [
-                                              TextButton.icon(onPressed: () => _addTask(p), icon: const Icon(Icons.add), label: const Text('افزودن کار')),
+                                              TextButton.icon(onPressed: () => _taskForm(project: p), icon: const Icon(Icons.add), label: const Text('افزودن کار')),
+                                              TextButton(
+                                                  onPressed: () async {
+                                                    final t = await askText(context, 'نام پروژه', init: '${p['title']}');
+                                                    if (t == null || t.isEmpty) return;
+                                                    _act(() => Sb.req('PATCH', '/rest/v1/projects', q: {'id': 'eq.${p['id']}'}, body: {'title': cleanText(t)}));
+                                                  },
+                                                  child: const Text('ویرایش نام')),
                                               const Spacer(),
                                               TextButton(
                                                   onPressed: () async {
                                                     final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('حذف پروژه؟'), content: const Text('همه‌ی کارهای این پروژه هم حذف می‌شه.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')), FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف'))]));
                                                     if (ok == true) _act(() => Sb.req('DELETE', '/rest/v1/projects', q: {'id': 'eq.${p['id']}'}));
                                                   },
-                                                  child: const Text('حذف پروژه', style: TextStyle(color: Colors.red))),
+                                                  child: const Text('حذف', style: TextStyle(color: Colors.red))),
                                             ]),
                                         ]));
                               }),
@@ -2576,18 +2829,25 @@ class _WsPageState extends State<WsPage> {
   }
 }
 
+
 // ویجت پت: تصویر پیکسلی پت (با آیتم‌ها) را می‌سازد و برای ویجت اندروید ذخیره می‌کند
 Future<Uint8List?> _petPng(Map h) async {
   final hatched = h['hatched'] != false;
   final rar = (h['rar'] as int?) ?? 0, col = (h['col'] as int?) ?? 0;
-  const sz = 192.0;
-  final cell = sz / 48;
+  const sz = 192.0, ps = 150.0;
+  final cell = ps / 48;
   final rec = ui.PictureRecorder();
   final cv = Canvas(rec);
   final paint = Paint()..filterQuality = FilterQuality.none;
   void draw(ui.Image im, Rect dst) => cv.drawImageRect(im, Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()), dst, paint);
+  cv.save();
+  cv.clipRRect(RRect.fromRectAndRadius(const Rect.fromLTWH(0, 0, sz, sz), const Radius.circular(22)));
+  ScenePainter(Gm.bg, isNight(), seasonNow(), const AlwaysStoppedAnimation<double>(0)).paint(cv, const Size(sz, sz));
+  cv.restore();
+  cv.save();
+  cv.translate((sz - ps) / 2, 14);
   if (!hatched) {
-    draw(await pxImage(eggSprite('${h['a']}', 0, rar)), const Rect.fromLTWH(0, 0, sz, sz));
+    draw(await pxImage(eggSprite('${h['a']}', 0, rar)), const Rect.fromLTWH(0, 0, ps, ps));
   } else {
     final stage = stageOf((h['lv'] as int?) ?? 1);
     final spr = petSprite('${h['a']}', stage, Gm.sat(h) < 25 ? 'sad' : 'idle', rar, col);
@@ -2601,12 +2861,13 @@ Future<Uint8List?> _petPng(Map h) async {
     }
 
     await item('back', spr.bx - spr.brx * .95, spr.by - spr.bry * .2, spr.brx * 1.7);
-    draw(pim, const Rect.fromLTWH(0, 0, sz, sz));
-    await item('neck', spr.hx, spr.hy + spr.hry * .95, spr.brx * 1.05);
-    await item('face', spr.hx, spr.ey + .6, spr.hrx * 1.45);
+    draw(pim, const Rect.fromLTWH(0, 0, ps, ps));
+    await item('neck', spr.hx, spr.hy + spr.hry * .98 + spr.hrx * .3, spr.hrx * .85);
+    await item('face', spr.hx, spr.ey + .9, spr.hrx * 1.15);
     await item('hat', spr.hx, spr.hy - spr.hry * .95 - spr.hrx * 1.5 * .12, spr.hrx * 1.5);
     await item('hand', spr.bx + spr.brx * 1.1, spr.by + spr.bry * .15, spr.brx * 1.3);
   }
+  cv.restore();
   final out = await rec.endRecording().toImage(sz.toInt(), sz.toInt());
   final bd = await out.toByteData(format: ui.ImageByteFormat.png);
   return bd?.buffer.asUint8List();
@@ -2663,6 +2924,12 @@ int? parseAmt(String s) {
   if (j[1] == 9 && j[2] == 30) return (key: 'yalda', text: '🍉 شب یلدات مبارک!');
   if (j[1] == 12 && j[2] >= 25) return (key: 'esfand', text: '🌸 آماده‌ی خونه‌تکونی و بهار!');
   return null;
+}
+
+bool recentDone(Map k) {
+  final ts = k['doneTs'] as num?;
+  if (ts != null) return DateTime.now().millisecondsSinceEpoch - ts < 86400000;
+  return k['doneAt'] == ds(DateTime.now());
 }
 
 class Mission {
@@ -2861,7 +3128,7 @@ class _MemoryGameState extends State<MemoryGame> {
     final c = moves <= 8 ? 20 : (moves <= 12 ? 14 : (moves <= 16 ? 8 : 4));
     final rest = maxPlays - plays;
     result = 'تموم شد با $moves حرکت\nجایزه: $c سکه 🪙\n${rest > 0 ? '$rest بار دیگه امروز می‌تونی بازی کنی.' : 'سهم امروزت تموم شد؛ فردا دوباره بیا 🌙'}';
-    Gm.earn(c, c);
+    Gm.earn(c, c, '+$c سکه 🪙 (بازی حافظه)');
     Mn.inc('memo');
     sfx('hatch');
   }
@@ -2911,14 +3178,14 @@ Future<void> scheduleFocusRem() async {
 }
 
 const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
-const String kVer = '1.0.8';
+const String kVer = '1.0.9';
 const kWhatsNew = [
-  '🍖 رفع باگ غذا دادن به پت‌ها',
-  '⏱️ تایمر تمرکز دایره‌ای (۱۰ تا ۶۰ دقیقه) و سؤال امنیتی ملایم‌تر',
-  '💼 وظایف میز کار توی تب کارها و ویجت اصلی + آیکون میز کار بالای صفحه',
-  '🐾 ویجت پت همه‌ی پت‌ها رو نشون می‌ده و آیتم‌ها ساده‌ی پیکسلی شدن',
-  '🎯 رفع تکرار سکه‌ی ماموریت‌ها و پس‌زمینه‌ی پت',
-  '🔐 ورود به میز کار مقاوم‌تر شد و خطاها فارسی و راهنما دارن',
+  '💼 میز کار: چند مسئول برای هر کار، ویرایش، زیرمجموعه، پیوست فایل و جایزه‌ی سکه',
+  '🔔 اعلان رویدادهای میز کار (تیک، گزارش، ارجاع، فایل) برای مدیر',
+  '🍖 جایزه‌ی تمرکز حالا غذاست و تمرکز ۴۰ دقیقه به بالا روزی یک بار',
+  '📋 کارهای عقب‌افتاده بالاتره و اولویت‌بندی با جابه‌جایی دستی',
+  '🐾 ویجت پت با پس‌زمینه، رفع باگ عینک و گردن‌بند و رنگ اژدها',
+  '📅 پاداش ورود روزانه، سطل بازیافت با حذف دائمی و صداهای جدید پت',
 ];
 
 class UpdInfo {
@@ -3257,7 +3524,7 @@ class D {
       g['progress'] ??= 0;
       g['deadline'] ??= ds(DateTime.now());
     }
-    prefs.setInt('ver', kDataVer);
+    prefs.setInt('ver', kVer);
   }
 
   static Future<void> save() async {
@@ -3271,7 +3538,7 @@ class D {
 
   static String backup() => jsonEncode({
         'app': 'Konj Planner',
-        'ver': kDataVer,
+        'ver': kVer,
         'tasks': tasks,
         'events': events,
         'txs': txs,
@@ -3382,9 +3649,13 @@ Future<void> widgetBackground(Uri? uri) async {
   await prefs.reload();
   if (uri.host == 'wtask') {
     Sb.load();
+    Gm.load();
     final wid = uri.pathSegments.first;
     try {
-      await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.$wid'}, body: {'status': 'done', 'updated_at': DateTime.now().toUtc().toIso8601String()});
+      final t = await Sb.getTask(wid);
+      if (t == null) return;
+      await Sb.markMine(t, true);
+      wsReward(t);
     } catch (_) {
       return;
     }
@@ -3404,6 +3675,7 @@ Future<void> widgetBackground(Uri? uri) async {
     if (hit.isEmpty) return;
     hit.first['done'] = true;
     hit.first['doneAt'] = today;
+    hit.first['doneTs'] = DateTime.now().millisecondsSinceEpoch;
     Gm.taskDone(hit.first);
     repeatNext(hit.first);
   } else {
@@ -3966,6 +4238,29 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 ));
       }
     }
+    if (prefs.getString('lgDay') != today) {
+      final y = ds(DateTime(now.year, now.month, now.day - 1));
+      final prevDay = prefs.getString('lgDay');
+      var st = prefs.getInt('lgStreak') ?? 0;
+      st = prevDay == y ? st + 1 : 1;
+      await prefs.setInt('lgStreak', st);
+      await prefs.setString('lgDay', today);
+      final dayN = (st - 1) % 7 + 1;
+      const rf = ['fd_apple', 'fd_apple', 'fd_fish', 'fd_apple', 'fd_cake', 'fd_meat', 'fd_feast'];
+      final it = itemById(rf[dayN - 1]);
+      Gm.inv[rf[dayN - 1]] = (Gm.inv[rf[dayN - 1]] ?? 0) + 1;
+      if (dayN == 7) Gm.coins += 20;
+      Gm.save();
+      if (mounted && !_viaWidget) {
+        await showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+                  title: Text('📅 پاداش ورود روز $dayN از ۷'),
+                  content: Text('${it?.emoji ?? ''} ${it?.name ?? ''} به کوله‌پشتی‌ات اضافه شد${dayN == 7 ? '\n+20 سکه 🪙 (روز هفتم!)' : ''}\n\nهر روز که بیای پاداشت بهتر می‌شه؛ یه روز نیای از اول شروع می‌شه.'),
+                  actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('عالی'))],
+                ));
+      }
+    }
     if (prefs.getString('hopeDay') != today && !_viaWidget) {
       await prefs.setString('hopeDay', today);
       if (!mounted) return;
@@ -4164,8 +4459,8 @@ class _H extends State<Home> with WidgetsBindingObserver {
   }
 
   Future<void> _focusStart() async {
-    if (fMin == 60 && prefs.getString('f60') == ds(DateTime.now())) {
-      toast('تمرکز ۶۰ دقیقه‌ای فقط روزی یک بار ممکنه؛ یه جلسه‌ی کوتاه‌تر انتخاب کن');
+    if (fMin >= 40 && prefs.getString('f40') == ds(DateTime.now())) {
+      toast('تمرکز ۴۰ دقیقه یا بیشتر فقط روزی یک بار ممکنه؛ یه جلسه‌ی کوتاه‌تر انتخاب کن');
       return;
     }
     final ok = await showDialog<bool>(
@@ -4181,8 +4476,8 @@ class _H extends State<Home> with WidgetsBindingObserver {
     if (ok != true) return;
     _keepOn(true);
     tab = 4;
-    if (fMin == 60) await prefs.setString('f60', ds(DateTime.now()));
-    await prefs.setInt('fQ', (prefs.getBool('fQuiz') ?? true) && fMin >= 25 ? _nextQ() : 0);
+    if (fMin >= 40) await prefs.setString('f40', ds(DateTime.now()));
+    await prefs.setInt('fQ', fMin >= 25 ? _nextQ() : 0);
     final end = DateTime.now().add(Duration(minutes: fMin)).millisecondsSinceEpoch;
     await prefs.setInt('fEnd', end);
     await prefs.setInt('fLen', fMin);
@@ -4352,8 +4647,18 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                        const Text('🗑️ سطل بازیافت', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        const Text('هر چیزی که حذف می‌کنی تا ۱۰ دقیقه این‌جا می‌مونه و قابل بازگردانیه.', style: TextStyle(fontSize: 12)),
+                        Row(children: [
+                          const Expanded(child: Text('🗑️ سطل بازیافت', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
+                          if (l.isNotEmpty)
+                            TextButton(
+                                onPressed: () {
+                                  prefs.setString('trash', '[]');
+                                  set(() {});
+                                  toast('سطل خالی شد');
+                                },
+                                child: const Text('خالی کردن همه', style: TextStyle(color: Colors.red))),
+                        ]),
+                        const Text('هر چیزی که حذف می‌کنی تا ۱۰ دقیقه این‌جا می‌مونه؛ می‌تونی بازگردانی یا برای همیشه پاکش کنی.', style: TextStyle(fontSize: 12)),
                         const SizedBox(height: 6),
                         if (l.isEmpty) const Padding(padding: EdgeInsets.all(24), child: Text('سطل خالیه.', textAlign: TextAlign.center)),
                         Flexible(
@@ -4364,13 +4669,22 @@ class _H extends State<Home> with WidgetsBindingObserver {
                                 contentPadding: EdgeInsets.zero,
                                 title: Text('${(e['item'] as Map)['t'] ?? (e['item'] as Map)['c'] ?? '—'}'),
                                 subtitle: Text('${names[e['type']] ?? ''} • ${(10 - (DateTime.now().millisecondsSinceEpoch - (e['at'] as int)) ~/ 60000).clamp(0, 10)} دقیقه‌ی دیگه'),
-                                trailing: FilledButton.tonal(
-                                    onPressed: () async {
-                                      await _binRestore(e);
-                                      set(() {});
-                                      toast('بازگردانده شد');
-                                    },
-                                    child: const Text('بازگردانی'))),
+                                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  IconButton(
+                                      tooltip: 'حذف دائمی',
+                                      icon: const Icon(Icons.delete_forever, color: Colors.red),
+                                      onPressed: () {
+                                        _binDrop('${e['type']}', Map<String, dynamic>.from(e['item'] as Map));
+                                        set(() {});
+                                      }),
+                                  FilledButton.tonal(
+                                      onPressed: () async {
+                                        await _binRestore(e);
+                                        set(() {});
+                                        toast('بازگردانده شد');
+                                      },
+                                      child: const Text('بازگردانی')),
+                                ])),
                         ])),
                       ])));
             }));
@@ -4909,6 +5223,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       repeatNext(k);
     }
     k['doneAt'] = d ? null : ds(DateTime.now());
+    k['doneTs'] = d ? null : DateTime.now().millisecondsSinceEpoch;
     if (d) {
       scheduleTask(k);
     } else {
@@ -5028,8 +5343,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
       try { return DateTime.parse(k['r']).isBefore(now); } catch (_) { return false; }
     }).toList();
     final needs = D.tasks.where((k) => k['done'] != true && !overdue.contains(k)).toList();
-    final done = D.tasks.where((k) => k['done'] == true).toList();
+    final done = D.tasks.where((k) => k['done'] == true && recentDone(k)).toList();
     int taskSort(Map a, Map b) {
+      final ao = a['ord'] as num?, bo = b['ord'] as num?;
+      if (ao != null && bo != null) return ao.compareTo(bo);
+      if (ao != null) return -1;
+      if (bo != null) return 1;
       final s = (b['star'] == true ? 1 : 0) - (a['star'] == true ? 1 : 0);
       return s != 0 ? s : (a['id'] as int).compareTo(b['id'] as int);
     }
@@ -5116,18 +5435,32 @@ class _H extends State<Home> with WidgetsBindingObserver {
               child: ListTile(
                   leading: Checkbox(value: false, onChanged: (_) => _wsDone(w)),
                   title: Text('${w['title']}'),
-                  subtitle: Text('💼 ${w['ws']}${w['due'] != null ? ' • مهلت: ${fd('${w['due']}')}' : ''}'),
+                  subtitle: Text('💼 ${w['ws']}${w['due'] != null ? ' • مهلت: ${fd('${w['due']}')}' : ''}${((w['reward'] as num?) ?? 0) > 0 ? ' • 🪙 ${w['reward']} سکه' : ''}'),
                   onTap: _openWork)),
         const SizedBox(height: 4),
       ],
       for (final e in ev)
         Card(child: ListTile(leading: const Icon(Icons.schedule), title: Text(e['t']), subtitle: Text('${hm(e['s'])} – ${hm(e['e'])}'))),
-      const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('نیاز به انجام', style: TextStyle(fontWeight: FontWeight.bold))),
-      for (final k in needs) tile(k),
-      if (needs.isEmpty) const Text('کار جدیدی برای انجام نداری.'),
-      const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('عقب‌افتاده', style: TextStyle(fontWeight: FontWeight.bold))),
+      const Padding(padding: EdgeInsets.only(top: 12, bottom: 4), child: Text('عقب‌افتاده ⚠️', style: TextStyle(fontWeight: FontWeight.bold))),
       for (final k in overdue) tile(k),
       if (overdue.isEmpty) const Text('کار عقب‌افتاده‌ای نداری.'),
+      const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('نیاز به انجام', style: TextStyle(fontWeight: FontWeight.bold))),
+      if (needs.length > 1) const Padding(padding: EdgeInsets.only(bottom: 4), child: Text('برای اولویت‌بندی، هر کار رو نگه دار و بالا/پایین ببر', style: TextStyle(fontSize: 11, color: Colors.grey))),
+      if (needs.isEmpty) const Text('کار جدیدی برای انجام نداری.'),
+      ReorderableListView(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          buildDefaultDragHandles: true,
+          onReorder: (o, n2) {
+            if (n2 > o) n2 -= 1;
+            final it = needs.removeAt(o);
+            needs.insert(n2, it);
+            for (var i = 0; i < needs.length; i++) {
+              needs[i]['ord'] = i;
+            }
+            upd();
+          },
+          children: [for (final k in needs) KeyedSubtree(key: ValueKey('ord${k['id']}'), child: tile(k))]),
       const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('انجام‌شده', style: TextStyle(fontWeight: FontWeight.bold))),
       for (final k in done) tile(k),
       if (done.isEmpty) const Text('هنوز کاری انجام‌شده ثبت نشده.'),
@@ -6341,24 +6674,50 @@ class _H extends State<Home> with WidgetsBindingObserver {
   Future<void> _pollWs() async {
     if (!Sb.ok || !Sb.loggedIn) return;
     try {
-      final r = Sb.rows(await Sb.req('GET', '/rest/v1/tasks', q: {'assignee': 'eq.${Sb.uid}', 'status': 'neq.done', 'select': 'id,title,workspace_id,due', 'order': 'created_at.desc'}));
+      final r = Sb.rows(await Sb.req('GET', '/rest/v1/tasks', q: {
+        'or': '(assignees.cs.{${Sb.uid}},assignee.eq.${Sb.uid})',
+        'select': 'id,title,workspace_id,due,status,assignee,assignees,done_by,reward,created_by',
+        'order': 'created_at.desc'
+      }));
+      final mine = r.where((t) => !Sb.myDone(t)).toList();
       final wsn = <String, String>{};
+      final mgrWs = <String>[];
       try {
-        for (final w in Sb.rows(await Sb.req('GET', '/rest/v1/workspaces', q: {'select': 'id,name'}))) {
-          wsn['${w['id']}'] = '${w['name']}';
+        for (final m in Sb.rows(await Sb.req('GET', '/rest/v1/members', q: {'user_id': 'eq.${Sb.uid}', 'select': 'workspace_id,role,workspaces(name)'}))) {
+          wsn['${m['workspace_id']}'] = '${(m['workspaces'] as Map?)?['name'] ?? ''}';
+          if (m['role'] == 'manager') mgrWs.add('${m['workspace_id']}');
         }
       } catch (_) {}
+      final notifyOn = prefs.getBool('wsNotif') ?? true;
       final old = prefs.getStringList('wsSeen');
       final seen = (old ?? <String>[]).toSet();
-      if (old != null && (prefs.getBool('wsNotif') ?? true)) {
-        for (final t in r) {
+      if (old != null && notifyOn) {
+        for (final t in mine) {
           if (!seen.contains('${t['id']}')) {
-            notif.show(6000 + ('${t['id']}'.hashCode.abs() % 900), '📋 وظیفه‌ی جدید در میز کار', '${t['title']}', nd);
+            final rwd = (t['reward'] as num?)?.toInt() ?? 0;
+            notif.show(6000 + ('${t['id']}'.hashCode.abs() % 500), '📋 وظیفه‌ی جدید در میز کار', '${t['title']}${rwd > 0 ? ' • 🪙 $rwd سکه' : ''}', nd);
           }
         }
       }
-      await prefs.setStringList('wsSeen', [for (final t in r) '${t['id']}']);
-      await prefs.setString('wsTasks', jsonEncode([for (final t in r) {'id': '${t['id']}', 'title': '${t['title']}', 'due': t['due'], 'ws': wsn['${t['workspace_id']}'] ?? ''}]));
+      await prefs.setStringList('wsSeen', [for (final t in mine) '${t['id']}']);
+      await prefs.setString('wsTasks', jsonEncode([for (final t in mine) {'id': '${t['id']}', 'title': '${t['title']}', 'due': t['due'], 'ws': wsn['${t['workspace_id']}'] ?? '', 'reward': t['reward'] ?? 0}]));
+      // اعلان رویدادها برای مدیر: تیک، گزارش، ارجاع، فایل
+      if (mgrWs.isNotEmpty) {
+        final since = prefs.getString('repSeen');
+        final q = <String, String>{'select': 'id,text,name,kind,workspace_id,created_at,user_id', 'order': 'created_at.desc', 'limit': '20', 'workspace_id': 'in.(${mgrWs.join(',')})'};
+        if (since != null) q['created_at'] = 'gt.$since';
+        final reps = Sb.rows(await Sb.req('GET', '/rest/v1/reports', q: q));
+        if (since != null && notifyOn) {
+          for (final e in reps.where((e) => e['user_id'] != Sb.uid).take(5)) {
+            notif.show(6500 + ('${e['id']}'.hashCode.abs() % 400), '💼 ${wsn['${e['workspace_id']}'] ?? 'میز کار'}', '${e['name']}: ${e['kind'] == 'file' ? '📎 فایل پیوست کرد (${e['text']})' : e['text']}', nd);
+          }
+        }
+        if (reps.isNotEmpty) {
+          await prefs.setString('repSeen', '${reps.first['created_at']}');
+        } else if (since == null) {
+          await prefs.setString('repSeen', DateTime.now().toUtc().toIso8601String());
+        }
+      }
       if (mounted) setState(() {});
       syncHomeWidget();
     } catch (_) {}
@@ -6366,18 +6725,17 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   Future<void> _wsDone(Map w) async {
     try {
-      await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${w['id']}'}, body: {'status': 'done', 'updated_at': DateTime.now().toUtc().toIso8601String()});
-      try {
-        final wid = Sb.rows(await Sb.req('GET', '/rest/v1/tasks', q: {'id': 'eq.${w['id']}', 'select': 'workspace_id'}));
-        if (wid.isNotEmpty) await Sb.req('POST', '/rest/v1/reports', body: {'task_id': w['id'], 'workspace_id': wid.first['workspace_id'], 'name': Sb.name, 'kind': 'status', 'text': 'وضعیت: انجام شد'});
-      } catch (_) {}
+      final t = await Sb.getTask('${w['id']}');
+      if (t == null) throw Exception('کار پیدا نشد');
+      await Sb.markMine(t, true);
+      final c = wsReward(t);
       final l = wsCacheRead()..removeWhere((x) => x['id'] == w['id']);
       await prefs.setString('wsTasks', jsonEncode(l));
       await prefs.setStringList('wsSeen', [for (final x in l) '${x['id']}']);
       sfx('done');
-      if (Gm.rw.add('ws:${w['id']}')) Gm.earn(6, 10, '+۶ سکه 🪙');
+      if (c > 0) Gm.say('+$c سکه 🪙 (پاداش وظیفه‌ی میز کار)', true);
       Mn.inc('tasks');
-      toast('وظیفه انجام شد ✓');
+      toast(c > 0 ? 'وظیفه انجام شد ✓ +$c سکه' : 'وظیفه انجام شد ✓');
       if (mounted) setState(() {});
       syncHomeWidget();
     } catch (e) {
@@ -6728,7 +7086,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     final len = prefs.getInt('fLen') ?? fMin;
     final left = running ? ((end - DateTime.now().millisecondsSinceEpoch) ~/ 1000).clamp(0, 86400).toInt() : 0;
     final h = Gm.heroes.isEmpty ? null : Gm.heroes[Gm.active];
-    final used60 = prefs.getString('f60') == ds(DateTime.now());
+    final used60 = prefs.getString('f40') == ds(DateTime.now());
     return ListView(padding: const EdgeInsets.all(12), children: [
       Card(
           child: Padding(
@@ -6741,9 +7099,9 @@ class _H extends State<Home> with WidgetsBindingObserver {
                     leftSec: left,
                     running: running,
                     onChange: (m) {
-                      if (m == 60 && used60) {
-                        toast('تمرکز ۶۰ دقیقه‌ای فقط روزی یک بار ممکنه');
-                        m = 55;
+                      if (m >= 40 && used60) {
+                        toast('تمرکز ۴۰ دقیقه یا بیشتر فقط روزی یک بار ممکنه');
+                        m = 35;
                       }
                       if (m != fMin) {
                         sfx('crack');
@@ -6752,7 +7110,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                     }),
                 const SizedBox(height: 8),
                 if (running) ...[
-                  Text('جایزه‌ی این جلسه: ${focusCoins(len)} سکه و $len تجربه'),
+                  Text('🎁 جایزه‌ی این جلسه: ${focusRewardText(len)} + $len تجربه'),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(icon: const Icon(Icons.stop), label: const Text('انصراف (بدون سکه)'), onPressed: _focusCancel),
                 ] else ...[
@@ -6760,25 +7118,19 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   Wrap(spacing: 6, children: [
                     for (final m in [10, 15, 20, 30, 45, 60])
                       ActionChip(
-                          label: Text(m == 60 && used60 ? '۶۰ ✓ امروز' : '$m'),
+                          label: Text(m >= 40 && used60 ? '$m ✓' : '$m'),
                           backgroundColor: fMin == m ? Theme.of(context).colorScheme.primaryContainer : null,
                           onPressed: () {
-                            if (m == 60 && used60) {
-                              toast('تمرکز ۶۰ دقیقه‌ای فقط روزی یک بار ممکنه');
+                            if (m >= 40 && used60) {
+                              toast('تمرکز ۴۰ دقیقه یا بیشتر فقط روزی یک بار ممکنه');
                               return;
                             }
                             setState(() => fMin = m);
                           }),
                   ]),
                   const SizedBox(height: 8),
-                  Text('جایزه: ${focusCoins(fMin)} سکه و $fMin تجربه برای پتت 🪙'),
-                  SwitchListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('سؤال امنیتی حین تمرکز'),
-                      subtitle: const Text('فقط برای جلسه‌های ۲۵ دقیقه به بالا؛ هر ۱۲ تا ۱۸ دقیقه یه سؤال ساده با ۱ دقیقه مهلت', style: TextStyle(fontSize: 11)),
-                      value: prefs.getBool('fQuiz') ?? true,
-                      onChanged: (v) => setState(() => prefs.setBool('fQuiz', v))),
+                  Text('🎁 جایزه: ${focusRewardText(fMin)} + $fMin تجربه برای پتت'),
+                  const Text('برای جلسه‌های ۲۵ دقیقه به بالا، هر ۱۲ تا ۱۸ دقیقه یه سؤال ساده می‌پرسم (۱ دقیقه مهلت)', style: TextStyle(fontSize: 11)),
                   FilledButton.icon(icon: const Icon(Icons.play_arrow), label: const Text('شروع تمرکز'), onPressed: _focusStart),
                 ],
               ]))),
@@ -7113,16 +7465,24 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 dense: true,
                 leading: PxEmoji(it.emoji, 38),
                 title: Text(it.name),
-                subtitle: slot == 'food' ? Text('+${it.xp} تجربه • 🍖 +${foodSat(it)} سیری${lovedBy != null ? ' • محبوب $lovedBy' : ''} • دارید: $owned${it.id.startsWith('sf_') ? ' • ⏳ ویژه‌ی این هفته' : ''}') : null,
+                subtitle: slot == 'food' ? Text('+${it.xp} تجربه • 🍖 +${foodSat(it)} سیری${lovedBy != null ? ' • محبوب $lovedBy' : ''} • دارید: $owned${it.id.startsWith('sf_') ? ' • ⏳ ویژه‌ی این هفته (فقط یک‌بار در هفته)' : ''}') : null,
                 trailing: slot != 'food' && owned > 0
                     ? const Text('✓ داری')
                     : FilledButton.tonal(
                         onPressed: () {
+                          if (it.id.startsWith('sf_') && Gm.rw.contains('sfbuy:${Mn.weekKey()}')) {
+                            toast('غذای ویژه‌ی هفته رو فقط یک بار در هفته می‌شه خرید');
+                            return;
+                          }
                           if (Gm.coins < it.price) {
                             _noCoins(it.price);
                             return;
                           }
                           if (Gm.buy(it)) {
+                            if (it.id.startsWith('sf_')) {
+                              Gm.rw.add('sfbuy:${Mn.weekKey()}');
+                              Gm.save();
+                            }
                             sfx('add');
                             toast('${it.name} خریده شد');
                             setState(() {});
