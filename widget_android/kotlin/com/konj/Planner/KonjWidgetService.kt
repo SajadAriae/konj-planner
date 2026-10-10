@@ -1,117 +1,58 @@
 package com.konj.planner
 
+import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
-import android.os.Build
-import android.provider.OpenableColumns
-import android.provider.Settings
-import android.util.Base64
-import android.view.WindowManager
-import io.flutter.embedding.android.FlutterActivity
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodChannel
+import android.widget.RemoteViews
+import android.widget.RemoteViewsService
+import org.json.JSONArray
 
-class MainActivity : FlutterActivity() {
-    private var pendingPick: MethodChannel.Result? = null
+class KonjWidgetService : RemoteViewsService() {
+    override fun onGetViewFactory(intent: Intent): RemoteViewsFactory = Factory(applicationContext)
 
-    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "konj/shake").setMethodCallHandler { call, result ->
-            when (call.method) {
-                "start" -> {
-                    val i = Intent(this, ShakeService::class.java)
-                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
-                    result.success(true)
-                }
-                "stop" -> {
-                    stopService(Intent(this, ShakeService::class.java))
-                    result.success(true)
-                }
-                "hasOverlay" -> result.success(Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this))
-                "openOverlay" -> {
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                    result.success(true)
-                }
-                "pickFile" -> {
-                    pendingPick = result
-                    val pi = Intent(Intent.ACTION_GET_CONTENT)
-                    pi.type = "*/*"
-                    pi.addCategory(Intent.CATEGORY_OPENABLE)
-                    startActivityForResult(Intent.createChooser(pi, null), 4711)
-                }
-                "shareText" -> {
-                    try {
-                        val i = Intent(Intent.ACTION_SEND)
-                        i.type = "text/plain"
-                        i.putExtra(Intent.EXTRA_TEXT, call.arguments as String)
-                        val c = Intent.createChooser(i, null)
-                        c.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        startActivity(c)
-                        result.success(true)
-                    } catch (e: Exception) {
-                        result.success(false)
-                    }
-                }
-                "openUrl" -> {
-                    try {
-                        val i = Intent(Intent.ACTION_VIEW, Uri.parse(call.arguments as String))
-                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        startActivity(i)
-                        result.success(true)
-                    } catch (e: Exception) {
-                        result.success(false)
-                    }
-                }
-                "keepOn" -> {
-                    val on = call.arguments as? Boolean ?: false
-                    runOnUiThread {
-                        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    }
-                    result.success(true)
-                }
-                else -> result.notImplemented()
-            }
+    class Factory(private val ctx: Context) : RemoteViewsFactory {
+        private var items = JSONArray()
+        private var acc = Color.parseColor("#4DB6AC")
+
+        private fun load() {
+            val p = ctx.getSharedPreferences("HomeWidgetPreferences", Context.MODE_PRIVATE)
+            items = try { JSONArray(p.getString("items", "[]")) } catch (e: Exception) { JSONArray() }
+            acc = try { Color.parseColor(p.getString("wacc", "#4DB6AC")) } catch (e: Exception) { Color.parseColor("#4DB6AC") }
         }
-    }
 
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode == 4711) {
-            val res = pendingPick
-            pendingPick = null
-            if (res == null) return
-            val uri = data?.data
-            if (resultCode != RESULT_OK || uri == null) {
-                res.success(null)
-                return
+        override fun onCreate() = load()
+        override fun onDataSetChanged() = load()
+        override fun onDestroy() {}
+        override fun getCount(): Int = items.length()
+        override fun getLoadingView(): RemoteViews? = null
+        override fun getViewTypeCount(): Int = 1
+        override fun getItemId(position: Int): Long = position.toLong()
+        override fun hasStableIds(): Boolean = true
+
+        override fun getViewAt(position: Int): RemoteViews {
+            val v = RemoteViews(ctx.packageName, R.layout.konj_widget_item)
+            val o = items.optJSONObject(position) ?: return v
+            val kind = o.optString("k")
+            val id = o.optString("id")
+            val done = o.optBoolean("d", false)
+            val isHabit = kind == "h"
+            val ic = o.optString("i", "")
+            v.setTextViewText(R.id.item_icon, if (ic.isNotEmpty()) ic else if (isHabit) (if (done) "\u2705" else "\uD83D\uDD25") else "\u2610")
+            v.setTextViewText(R.id.item_text, o.optString("t"))
+            v.setTextColor(R.id.item_text, if (done) Color.parseColor("#99FFFFFF") else Color.WHITE)
+            v.setTextColor(R.id.item_icon, if (isHabit) acc else Color.WHITE)
+            if (kind == "hdr") {
+                v.setTextColor(R.id.item_text, acc)
+                v.setTextViewText(R.id.item_text, o.optString("t"))
+                return v
             }
-            try {
-                var name = "file"
-                var size = 0L
-                contentResolver.query(uri, null, null, null, null)?.use { c ->
-                    if (c.moveToFirst()) {
-                        val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        if (ni >= 0) name = c.getString(ni)
-                        val si = c.getColumnIndex(OpenableColumns.SIZE)
-                        if (si >= 0) size = c.getLong(si)
-                    }
-                }
-                if (size > 5L * 1024 * 1024) {
-                    res.success(mapOf("error" to "big"))
-                    return
-                }
-                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: ByteArray(0)
-                if (bytes.size > 5 * 1024 * 1024) {
-                    res.success(mapOf("error" to "big"))
-                    return
-                }
-                val mime = contentResolver.getType(uri) ?: "application/octet-stream"
-                res.success(mapOf("name" to name, "mime" to mime, "b64" to Base64.encodeToString(bytes, Base64.NO_WRAP)))
-            } catch (e: Exception) {
-                res.success(null)
+            val host = when (kind) { "h" -> "habit"; "w" -> "wtask"; else -> "done" }
+            val fill = Intent().apply {
+                data = Uri.parse("konj://" + host + "/" + id)
             }
-            return
+            v.setOnClickFillInIntent(R.id.item_root, fill)
+            return v
         }
-        super.onActivityResult(requestCode, resultCode, data)
     }
 }
