@@ -144,3 +144,35 @@ create table if not exists backups (
 alter table backups enable row level security;
 drop policy if exists bk_all on backups;
 create policy bk_all on backups for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+
+-- ───────── نسخه‌ی جدید: چند مسئول، جایزه، زیرمجموعه، فایل پیوست ─────────
+alter table tasks add column if not exists assignees uuid[] not null default '{}';
+alter table tasks add column if not exists done_by uuid[] not null default '{}';
+alter table tasks add column if not exists subs jsonb not null default '[]';
+alter table tasks add column if not exists reward int not null default 0;
+alter table reports add column if not exists path text;
+
+update tasks set assignees = array[assignee]
+  where assignee is not null and cardinality(assignees) = 0;
+
+drop policy if exists tsk_upd on tasks;
+create policy tsk_upd on tasks for update
+  using (is_manager(workspace_id) or assignee = auth.uid() or auth.uid() = any(assignees))
+  with check (is_member(workspace_id));
+
+-- فضای ذخیره‌ی فایل‌ها (خصوصی؛ فقط اعضای همان میزکار)
+insert into storage.buckets (id, name, public) values ('attachments', 'attachments', false)
+  on conflict (id) do nothing;
+
+drop policy if exists att_sel on storage.objects;
+drop policy if exists att_ins on storage.objects;
+drop policy if exists att_del on storage.objects;
+create policy att_sel on storage.objects for select to authenticated
+  using (bucket_id = 'attachments' and is_member(((storage.foldername(name))[1])::uuid));
+create policy att_ins on storage.objects for insert to authenticated
+  with check (bucket_id = 'attachments' and is_member(((storage.foldername(name))[1])::uuid));
+create policy att_del on storage.objects for delete to authenticated
+  using (bucket_id = 'attachments' and is_manager(((storage.foldername(name))[1])::uuid));
+
+notify pgrst, 'reload schema';
