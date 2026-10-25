@@ -175,4 +175,48 @@ create policy att_ins on storage.objects for insert to authenticated
 create policy att_del on storage.objects for delete to authenticated
   using (bucket_id = 'attachments' and is_manager(((storage.foldername(name))[1])::uuid));
 
+
+
+
+-- ───────── سرگروه و اعضای هر پروژه ─────────
+create table if not exists project_members (
+  project_id uuid not null references projects(id) on delete cascade,
+  workspace_id uuid not null references workspaces(id) on delete cascade,
+  user_id uuid not null,
+  is_lead boolean not null default false,
+  primary key (project_id, user_id)
+);
+alter table project_members enable row level security;
+
+create or replace function is_lead(p uuid) returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists (select 1 from project_members where project_id = p and user_id = auth.uid() and is_lead);
+$$;
+
+drop policy if exists pm_sel on project_members;
+drop policy if exists pm_ins on project_members;
+drop policy if exists pm_upd on project_members;
+drop policy if exists pm_del on project_members;
+create policy pm_sel on project_members for select using (is_member(workspace_id));
+create policy pm_ins on project_members for insert
+  with check (is_manager(workspace_id) or (is_lead(project_id) and is_lead = false));
+create policy pm_upd on project_members for update using (is_manager(workspace_id));
+create policy pm_del on project_members for delete
+  using (is_manager(workspace_id) or (is_lead(project_id) and is_lead = false));
+
+-- سرگروه توی پروژه‌ی خودش مثل مدیر عمل می‌کنه (جز حذف پروژه و تغییر سرگروه)
+drop policy if exists prj_upd on projects;
+create policy prj_upd on projects for update using (is_manager(workspace_id) or is_lead(id));
+
+drop policy if exists tsk_ins on tasks;
+create policy tsk_ins on tasks for insert with check (is_manager(workspace_id) or is_lead(project_id));
+
+drop policy if exists tsk_upd on tasks;
+create policy tsk_upd on tasks for update
+  using (is_manager(workspace_id) or is_lead(project_id) or assignee = auth.uid() or auth.uid() = any(assignees))
+  with check (is_member(workspace_id));
+
+drop policy if exists tsk_del on tasks;
+create policy tsk_del on tasks for delete using (is_manager(workspace_id) or is_lead(project_id));
+
 notify pgrst, 'reload schema';
