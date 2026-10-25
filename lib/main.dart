@@ -3269,7 +3269,7 @@ Future<void> scheduleFocusRem() async {
 }
 
 const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
-const String kVer = '1.0.10';
+const String kAppVer = '1.0.10';
 const kWhatsNew = [
   '📅 اعلان دائمی «اطلاعات روز» با تاریخ شمسی/میلادی توی نوار اعلان',
   '👥 میز کار: سرگروه برای هر پروژه، اعضای پروژه و تیک زیرمجموعه‌ها توی بخش وظایف',
@@ -4379,7 +4379,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
         await showDialog(
             context: context,
             builder: (ctx) => AlertDialog(
-                  title: Text('🎉 تازه‌های نسخه‌ی $kVer'),
+                  title: Text('🎉 تازه‌های نسخه‌ی $kAppVer'),
                   content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [for (final w in kWhatsNew) Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Text(w))])),
                   actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('عالیه!'))],
                 ));
@@ -4894,7 +4894,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                           contentPadding: EdgeInsets.zero,
                           leading: const Icon(Icons.info_outline),
                           title: const Text('نسخه‌ی برنامه'),
-                          subtitle: Text('$kVer${kBuild > 0 ? ' (ساخت $kBuild)' : ''}'),
+                          subtitle: Text('$kAppVer${kBuild > 0 ? ' (ساخت $kBuild)' : ''}'),
                           trailing: TextButton(
                               onPressed: () {
                                 Navigator.pop(ctx);
