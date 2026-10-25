@@ -1,5 +1,9 @@
 package com.konj.planner
 
+import android.app.job.JobInfo
+import android.app.job.JobScheduler
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -30,6 +34,27 @@ class MainActivity : FlutterActivity() {
                 "hasOverlay" -> result.success(Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this))
                 "openOverlay" -> {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                    result.success(true)
+                }
+                "scheduleWsJob" -> {
+                    try {
+                        val js = getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
+                        val info = JobInfo.Builder(7001, ComponentName(this, WsJobService::class.java))
+                            .setPeriodic(15 * 60 * 1000L)
+                            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                            .setPersisted(true)
+                            .build()
+                        js.schedule(info)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+                "cancelWsJob" -> {
+                    try {
+                        (getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler).cancel(7001)
+                    } catch (e: Exception) {
+                    }
                     result.success(true)
                 }
                 "pickFile" -> {
