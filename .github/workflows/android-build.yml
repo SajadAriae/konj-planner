@@ -67,6 +67,7 @@ jobs:
 
           put KonjPlannerWidgetProvider.kt $K
           put KonjPetWidgetProvider.kt $K
+          put WsJobService.kt $K
           put KonjWidgetService.kt $K
           put ShakeService.kt $K
           put MainActivity.kt $K
@@ -211,12 +212,13 @@ jobs:
               m = re.sub(r'(<manifest[^>]*>)', lambda x: x.group(1) + add, m, count=1)
           comps = (
               '\n        <receiver android:name=".KonjPetWidgetProvider" android:exported="true"><intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter><meta-data android:name="android.appwidget.provider" android:resource="@xml/konj_pet_widget_info" /></receiver>'
+              '\n        <service android:name=".WsJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />'
               '\n        <service android:name=".KonjWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS" android:exported="false" />'
               '\n        <service android:name=".ShakeService" android:exported="false" android:foregroundServiceType="specialUse">'
               '\n            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="shake_to_open_app" />'
               '\n        </service>'
           )
-          if "KonjPetWidgetProvider" not in m or "ShakeService" not in m:
+          if "WsJobService" not in m or "ShakeService" not in m:
               m = m.replace("    </application>", comps + "\n    </application>", 1)
           manifest.write_text(m, encoding="utf-8")
           print(m)
