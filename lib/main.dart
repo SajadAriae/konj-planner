@@ -6,7 +6,6 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -16,7 +15,7 @@ import 'package:timezone/data/latest.dart' as tzd;
 import 'package:timezone/timezone.dart' as tz;
 
 // ───────────────────────── تنظیمات و ثابت‌ها ─────────────────────────
-const kDataVersion = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
+const kVer = 5; // نسخه‌ی ساختار داده؛ با تغییر ساختار بالا ببر و در D.load مهاجرت بنویس
 final notif = FlutterLocalNotificationsPlugin();
 late SharedPreferences prefs;
 final look = ValueNotifier<int>(0); // با هر تغییر ظاهر (رنگ/حالت تیره) زیاد می‌شود
@@ -166,10 +165,10 @@ const gItems = [
   GItem('fd_steak', 'استیک', '🥩', 'food', price: 22, xp: 38, love: 'steak'),
   GItem('fd_cake', 'کیک', '🍰', 'food', price: 45, xp: 70),
   GItem('fd_feast', 'سفره‌ی ویژه', '🍲', 'food', price: 90, xp: 150),
-  GItem('sf_pumpkin', 'کدو حلوایی', '🎃', 'food', price: 120, xp: 70),
-  GItem('sf_melon', 'هندوانه', '🍉', 'food', price: 120, xp: 70),
-  GItem('sf_grape', 'انگور', '🍇', 'food', price: 120, xp: 70),
-  GItem('sf_ice', 'بستنی', '🍦', 'food', price: 120, xp: 70),
+  GItem('sf_pumpkin', 'کدو حلوایی', '🎃', 'food', price: 60, xp: 70),
+  GItem('sf_melon', 'هندوانه', '🍉', 'food', price: 60, xp: 70),
+  GItem('sf_grape', 'انگور', '🍇', 'food', price: 60, xp: 70),
+  GItem('sf_ice', 'بستنی', '🍦', 'food', price: 60, xp: 70),
   GItem('h_cap', 'کپ', '🧢', 'hat', price: 30),
   GItem('h_straw', 'کلاه حصیری', '👒', 'hat', price: 50),
   GItem('h_top', 'کلاه سیلندر', '🎩', 'hat', price: 60),
@@ -1086,10 +1085,12 @@ PetSprite _buildPet(String sp, int stage, String face, int rar, int col) {
   return PetSprite(px, hcx, hcy, hrx, hry, bcx, bcy, brx, bry, mx, my, ey);
 }
 
+List<int> _eggPal(int rar) => rar == 2 ? const [0xFFF6C945, 0xFFFFF3C4, 0xFFC98B1F] : (rar == 1 ? const [0xFFB48CE8, 0xFFEADFFF, 0xFF6C4BB5] : const [0xFF9BB7D4, 0xFFE3EEF8, 0xFF5E7FA6]);
+
 final _eggCache = <String, Px>{};
 Px eggSprite(String sp, int cracks, [int rar = 0]) => _eggCache.putIfAbsent('$sp|$cracks|$rar', () {
       final px = Px(48, 48);
-      final pc = _palFor(sp, rar);
+      final pc = _eggPal(rar);
       final shell = _tones(0xFFF7F0DE), spot = _tones(pc[0]);
       const cy = 27.0, ry = 19.0;
       for (var y = 0; y < px.h; y++) {
@@ -2226,6 +2227,7 @@ class _WorkPageState extends State<WorkPage> {
                         await Sb.signIn(cleanEmail(email.text), cleanText(pass.text));
                       }
                       await _load();
+                      await syncWsJob();
                     }),
             child: Text(reg ? 'ساخت حساب' : 'ورود')),
         TextButton(onPressed: () => setState(() => reg = !reg), child: Text(reg ? 'حساب دارم؛ ورود' : 'حساب ندارم؛ ثبت‌نام')),
@@ -2235,6 +2237,16 @@ class _WorkPageState extends State<WorkPage> {
           onRefresh: _load,
           child: ListView(padding: const EdgeInsets.all(12), children: [
             Card(child: ListTile(leading: const Icon(Icons.person), title: Text(Sb.name.isEmpty ? Sb.email : Sb.name), subtitle: Text(Sb.email))),
+            Card(
+                child: SwitchListTile(
+                    title: const Text('اعلان وظیفه‌ها و رویدادهای میز کار'),
+                    subtitle: const Text('حتی وقتی برنامه بسته است، هر ۱۵ تا ۳۰ دقیقه چک می‌شه. برای کار کردنش توی تنظیمات گوشی برای کنج پلنر «بدون محدودیت باتری» و «شروع خودکار» رو روشن کن.', style: TextStyle(fontSize: 11)),
+                    value: prefs.getBool('wsNotif') ?? true,
+                    onChanged: (v) {
+                      prefs.setBool('wsNotif', v);
+                      setState(() {});
+                      syncWsJob();
+                    })),
             Card(
                 child: Padding(
                     padding: const EdgeInsets.all(12),
@@ -2326,6 +2338,7 @@ class _WorkPageState extends State<WorkPage> {
                 tooltip: 'خروج',
                 onPressed: () async {
                   await Sb.logout();
+                  await syncWsJob();
                   if (mounted) setState(() => list = []);
                 }),
         ]),
@@ -2346,7 +2359,7 @@ class WsPage extends StatefulWidget {
 }
 
 class _WsPageState extends State<WsPage> {
-  List<Map> projects = [], tasks = [], members = [];
+  List<Map> projects = [], tasks = [], members = [], pmembers = [];
   Timer? _t;
   bool loading = true;
   String err = '';
@@ -2373,12 +2386,14 @@ class _WsPageState extends State<WsPage> {
         Sb.req('GET', '/rest/v1/projects', q: {'workspace_id': 'eq.$wid', 'order': 'created_at.asc'}),
         Sb.req('GET', '/rest/v1/tasks', q: {'workspace_id': 'eq.$wid', 'order': 'created_at.desc'}),
         Sb.req('GET', '/rest/v1/members', q: {'workspace_id': 'eq.$wid', 'order': 'name.asc'}),
+        Sb.req('GET', '/rest/v1/project_members', q: {'workspace_id': 'eq.$wid'}).catchError((_) => <dynamic>[]),
       ]);
       if (!mounted) return;
       setState(() {
         projects = Sb.rows(r[0]);
         tasks = Sb.rows(r[1]);
         members = Sb.rows(r[2]);
+        pmembers = Sb.rows(r[3]);
         loading = false;
         err = '';
       });
@@ -2460,6 +2475,79 @@ class _WsPageState extends State<WsPage> {
     }
   }
 
+  List<Map> pm(Map p) => pmembers.where((x) => x['project_id'] == p['id']).toList();
+  bool isLead(Map p) => pm(p).any((x) => x['user_id'] == Sb.uid && x['is_lead'] == true);
+  bool canEditProject(Map p) => mgr || isLead(p);
+  Map? projOf(Map t) => projects.where((p) => p['id'] == t['project_id']).firstOrNull;
+  bool canEditTask(Map t) {
+    if (mgr) return true;
+    final p = projOf(t);
+    return p != null && isLead(p);
+  }
+
+  List<Map> _pickable(Map? p) {
+    if (p == null) return members;
+    final ids = pm(p).map((x) => '${x['user_id']}').toSet();
+    return ids.isEmpty ? members : members.where((m) => ids.contains('${m['user_id']}')).toList();
+  }
+
+  // اعضای پروژه و سرگروه‌ها: مدیر هر دو رو تنظیم می‌کنه؛ سرگروه فقط اعضای عادی رو کم و زیاد می‌کنه
+  void _projectMembers(Map p) {
+    showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, set) {
+              final cur = pm(p);
+              return SafeArea(
+                  child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                        Text('اعضای «${p['title']}»', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                        Text(mgr ? 'تیک = عضو پروژه • ⭐ = سرگروه (سرگروه همه‌ی کارهای مدیر رو توی این پروژه داره، جز حذف پروژه و تغییر سرگروه)' : 'تیک = عضو پروژه', style: const TextStyle(fontSize: 12)),
+                        const SizedBox(height: 6),
+                        Flexible(
+                            child: ListView(shrinkWrap: true, children: [
+                          for (final m in members)
+                            Builder(builder: (_) {
+                              final uid = '${m['user_id']}';
+                              final row = cur.where((x) => '${x['user_id']}' == uid).firstOrNull;
+                              final lead = row != null && row['is_lead'] == true;
+                              return CheckboxListTile(
+                                  dense: true,
+                                  controlAffinity: ListTileControlAffinity.leading,
+                                  value: row != null,
+                                  title: Text('${m['name']}${lead ? ' ⭐ سرگروه' : ''}'),
+                                  secondary: mgr
+                                      ? IconButton(
+                                          tooltip: lead ? 'برداشتن سرگروهی' : 'سرگروه کردن',
+                                          icon: Icon(lead ? Icons.star : Icons.star_border, color: lead ? Colors.amber : null),
+                                          onPressed: () async {
+                                            if (row == null) {
+                                              await _act(() => Sb.req('POST', '/rest/v1/project_members', body: {'project_id': p['id'], 'workspace_id': wid, 'user_id': uid, 'is_lead': true}));
+                                            } else {
+                                              await _act(() => Sb.req('PATCH', '/rest/v1/project_members', q: {'project_id': 'eq.${p['id']}', 'user_id': 'eq.$uid'}, body: {'is_lead': !lead}));
+                                            }
+                                            set(() {});
+                                          })
+                                      : null,
+                                  onChanged: (v) async {
+                                    if (lead && !mgr) {
+                                      snack('فقط مدیر می‌تونه سرگروه رو کم کنه');
+                                      return;
+                                    }
+                                    if (v == true) {
+                                      await _act(() => Sb.req('POST', '/rest/v1/project_members', body: {'project_id': p['id'], 'workspace_id': wid, 'user_id': uid, 'is_lead': false}));
+                                    } else {
+                                      await _act(() => Sb.req('DELETE', '/rest/v1/project_members', q: {'project_id': 'eq.${p['id']}', 'user_id': 'eq.$uid'}));
+                                    }
+                                    set(() {});
+                                  });
+                            }),
+                        ])),
+                      ])));
+            }));
+  }
+
   String nameOf(dynamic id) => members.where((x) => x['user_id'] == id).map((x) => '${x['name']}').firstOrNull ?? '—';
 
   Future<void> _act(Future<void> Function() f) async {
@@ -2499,7 +2587,7 @@ class _WsPageState extends State<WsPage> {
                       TextField(controller: desc, maxLines: 3, minLines: 1, decoration: const InputDecoration(labelText: 'توضیحات')),
                       const Padding(padding: EdgeInsets.only(top: 10), child: Text('مسئول‌ها (می‌تونی چند نفر انتخاب کنی)', style: TextStyle(fontSize: 12))),
                       Wrap(spacing: 6, children: [
-                        for (final m in members)
+                        for (final m in _pickable(project ?? (edit == null ? null : projOf(edit))))
                           FilterChip(
                               label: Text('${m['name']}'),
                               selected: sel.contains('${m['user_id']}'),
@@ -2629,7 +2717,7 @@ class _WsPageState extends State<WsPage> {
                                 controlAffinity: ListTileControlAffinity.leading,
                                 value: subs[i]['done'] == true,
                                 title: Text('${subs[i]['t']}', style: subs[i]['done'] == true ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
-                                onChanged: (mine || mgr)
+                                onChanged: (mine || canEditTask(cur))
                                     ? (v) async {
                                         subs[i]['done'] = v == true;
                                         await _act(() => Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}, body: {'subs': subs, 'updated_at': DateTime.now().toUtc().toIso8601String()}));
@@ -2672,7 +2760,7 @@ class _WsPageState extends State<WsPage> {
                                   set(() => reload++);
                                 },
                                 child: const Text('ارجاع')),
-                          if (mgr) ...[
+                          if (canEditTask(cur)) ...[
                             OutlinedButton(
                                 onPressed: () {
                                   Navigator.pop(ctx);
@@ -2780,12 +2868,13 @@ class _WsPageState extends State<WsPage> {
                                 return Card(
                                     child: ExpansionTile(
                                         title: Text('${p['title']}'),
-                                        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('$dn از ${pt.length} کار انجام شده'), const SizedBox(height: 4), LinearProgressIndicator(value: pt.isEmpty ? 0 : dn / pt.length)]),
+                                        subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [if (pm(p).any((x) => x['is_lead'] == true)) Text('⭐ سرگروه: ${pm(p).where((x) => x['is_lead'] == true).map((x) => nameOf(x['user_id'])).join('، ')}', style: const TextStyle(fontSize: 12)), Text('$dn از ${pt.length} کار انجام شده'), const SizedBox(height: 4), LinearProgressIndicator(value: pt.isEmpty ? 0 : dn / pt.length)]),
                                         children: [
                                           for (final t in pt) _taskTile(t),
-                                          if (mgr)
-                                            Row(children: [
+                                          if (canEditProject(p))
+                                            Wrap(spacing: 4, children: [
                                               TextButton.icon(onPressed: () => _taskForm(project: p), icon: const Icon(Icons.add), label: const Text('افزودن کار')),
+                                              TextButton.icon(onPressed: () => _projectMembers(p), icon: const Icon(Icons.group_outlined), label: const Text('اعضا و سرگروه')),
                                               TextButton(
                                                   onPressed: () async {
                                                     final t = await askText(context, 'نام پروژه', init: '${p['title']}');
@@ -2793,13 +2882,13 @@ class _WsPageState extends State<WsPage> {
                                                     _act(() => Sb.req('PATCH', '/rest/v1/projects', q: {'id': 'eq.${p['id']}'}, body: {'title': cleanText(t)}));
                                                   },
                                                   child: const Text('ویرایش نام')),
-                                              const Spacer(),
-                                              TextButton(
-                                                  onPressed: () async {
-                                                    final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('حذف پروژه؟'), content: const Text('همه‌ی کارهای این پروژه هم حذف می‌شه.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')), FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف'))]));
-                                                    if (ok == true) _act(() => Sb.req('DELETE', '/rest/v1/projects', q: {'id': 'eq.${p['id']}'}));
-                                                  },
-                                                  child: const Text('حذف', style: TextStyle(color: Colors.red))),
+                                              if (mgr)
+                                                TextButton(
+                                                    onPressed: () async {
+                                                      final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(title: const Text('حذف پروژه؟'), content: const Text('همه‌ی کارهای این پروژه هم حذف می‌شه.'), actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('نه')), FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('حذف'))]));
+                                                      if (ok == true) _act(() => Sb.req('DELETE', '/rest/v1/projects', q: {'id': 'eq.${p['id']}'}));
+                                                    },
+                                                    child: const Text('حذف پروژه', style: TextStyle(color: Colors.red))),
                                             ]),
                                         ]));
                               }),
@@ -3179,14 +3268,14 @@ Future<void> scheduleFocusRem() async {
 }
 
 const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
-const String kVer = '1.0.9';
+const String kVer = '1.0.10';
 const kWhatsNew = [
-  '💼 میز کار: چند مسئول برای هر کار، ویرایش، زیرمجموعه، پیوست فایل و جایزه‌ی سکه',
-  '🔔 اعلان رویدادهای میز کار (تیک، گزارش، ارجاع، فایل) برای مدیر',
-  '🍖 جایزه‌ی تمرکز حالا غذاست و تمرکز ۴۰ دقیقه به بالا روزی یک بار',
-  '📋 کارهای عقب‌افتاده بالاتره و اولویت‌بندی با جابه‌جایی دستی',
-  '🐾 ویجت پت با پس‌زمینه، رفع باگ عینک و گردن‌بند و رنگ اژدها',
-  '📅 پاداش ورود روزانه، سطل بازیافت با حذف دائمی و صداهای جدید پت',
+  '📅 اعلان دائمی «اطلاعات روز» با تاریخ شمسی/میلادی توی نوار اعلان',
+  '👥 میز کار: سرگروه برای هر پروژه، اعضای پروژه و تیک زیرمجموعه‌ها توی بخش وظایف',
+  '🔔 اعلان وظیفه‌ی جدید و رویدادها حتی وقتی برنامه بسته است',
+  '⏰ عادت انجام‌شده دیگه یادآوری نمی‌کنه و کار عقب‌افتاده باید زمان جدید بگیره',
+  '🥚 حیوون داخل تخم شانسیه و غذاها اول کوله‌پشتی هستن',
+  '📊 خلاصه‌ی هفتگی، شماره‌ی نسخه توی تنظیمات و رفع باگ جابه‌جایی کارها',
 ];
 
 class UpdInfo {
@@ -3243,6 +3332,12 @@ List<Map<String, dynamic>> wsCacheRead() {
   } catch (_) {
     return [];
   }
+}
+
+Future<void> syncWsJob() async {
+  try {
+    await shakeCh.invokeMethod(Sb.ok && Sb.loggedIn ? 'scheduleWsJob' : 'cancelWsJob');
+  } catch (_) {}
 }
 
 final checkinReq = ValueNotifier<int>(0);
@@ -3525,7 +3620,7 @@ class D {
       g['progress'] ??= 0;
       g['deadline'] ??= ds(DateTime.now());
     }
-    prefs.setInt('ver', kDataVersion);
+    prefs.setInt('ver', kVer);
   }
 
   static Future<void> save() async {
@@ -3599,6 +3694,48 @@ class D {
 // ───────────────────────── ویجت صفحه اصلی ─────────────────────────
 String _hex(Color c) => '#${(c.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
+Future<void> showStatusNotif() async {
+  try {
+    if (!(prefs.getBool('statusN') ?? true)) {
+      await notif.cancel(9000);
+      return;
+    }
+    final now = DateTime.now(), today = ds(now);
+    final open = D.tasks.where((k) => k['done'] != true).length;
+    final overdue = D.tasks.where((k) {
+      if (k['done'] == true || k['r'] == null) return false;
+      try {
+        return DateTime.parse(k['r']).isBefore(now);
+      } catch (_) {
+        return false;
+      }
+    }).length;
+    final hd = D.habits.where((h) => hDoneG(h, today)).length;
+    final ws = wsCacheRead().length;
+    String title(DateTime d) => jal ? fdl(d) : '${wdn[d.weekday]} ${d.day} ${gmn[d.month - 1]} ${d.year}';
+    final other = jal ? 'میلادی: ${ds(now)}' : 'شمسی: ${fd(today)}';
+    final body = '$other\nکار باز: $open • عقب‌افتاده: $overdue\nعادت امروز: $hd از ${D.habits.length}${ws > 0 ? ' • وظیفه‌ی میز کار: $ws' : ''}\nسکه: ${n(Gm.coins)} 🪙\n${hopeFor(now)}';
+    final det = NotificationDetails(
+        android: AndroidNotificationDetails('konj_status_v1', 'اطلاعات روز',
+            channelDescription: 'تاریخ و خلاصه‌ی روز؛ همیشه توی نوار اعلان می‌مونه',
+            importance: Importance.low,
+            priority: Priority.low,
+            ongoing: true,
+            autoCancel: false,
+            showWhen: false,
+            playSound: false,
+            enableVibration: false,
+            onlyAlertOnce: true,
+            icon: 'ic_notif',
+            visibility: NotificationVisibility.public,
+            styleInformation: BigTextStyleInformation(body)));
+    await notif.show(9000, '📅 ${title(now)}', '$other • کار باز: $open • عادت: $hd/${D.habits.length}', det);
+    // نیمه‌شب تاریخ خودش عوض شه
+    final nx = DateTime(now.year, now.month, now.day + 1, 0, 5);
+    await zs(9000, '📅 ${title(nx)}', 'آمار امروز رو با باز کردن برنامه ببین', tz.TZDateTime.from(nx, tz.local), det: det);
+  } catch (_) {}
+}
+
 Future<void> syncHomeWidget() async {
   try {
     final now = DateTime.now(), today = ds(now);
@@ -3637,6 +3774,7 @@ Future<void> syncHomeWidget() async {
     await HomeWidget.updateWidget(androidName: 'KonjPlannerWidgetProvider');
   } catch (_) {}
   syncPetWidget();
+  showStatusNotif();
 }
 
 // ───────────────────────── اعلان‌ها ─────────────────────────
@@ -3688,6 +3826,9 @@ Future<void> widgetBackground(Uri? uri) async {
     } else {
       l.add(today);
       Gm.habitDone(hit.first, today);
+      try {
+        await notif.cancel(habitNidD(id, 0));
+      } catch (_) {}
     }
   }
   await D.save();
@@ -3716,10 +3857,10 @@ int eventNid(int id) => 1500000000 + (id.abs() % 500000000);
 
 String lastErr = '';
 
-Future<bool> zs(int id, String t, String b, tz.TZDateTime w, {bool weekly = false, bool daily = false, String? payload}) async {
+Future<bool> zs(int id, String t, String b, tz.TZDateTime w, {bool weekly = false, bool daily = false, String? payload, NotificationDetails? det}) async {
   for (final mode in [AndroidScheduleMode.exactAllowWhileIdle, AndroidScheduleMode.alarmClock, AndroidScheduleMode.inexactAllowWhileIdle]) {
     try {
-      await notif.zonedSchedule(id, t, b, w, nd,
+      await notif.zonedSchedule(id, t, b, w, det ?? nd,
           payload: payload,
           androidScheduleMode: mode,
           uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
@@ -3739,13 +3880,28 @@ tz.TZDateTime nextDaily(int m) {
   return tz.TZDateTime.from(t, tz.local);
 }
 
+int habitNidD(int id, int i) => 1000000000 + (id.abs() % 40000000) * 16 + i;
+
 int habitNid(int id) => 1200000000 + (id.abs() % 300000000);
 
 Future<void> scheduleHabit(Map h) async {
   final r = h['rem'];
+  for (var i = 0; i < 10; i++) {
+    try {
+      await notif.cancel(habitNidD(h['id'] as int, i));
+    } catch (_) {}
+  }
   if (r is! int) return;
+  final now = DateTime.now(), today = ds(now);
   final pn = Gm.heroes.isEmpty ? null : '${Gm.heroes[Gm.active]['n']}';
-  await zs(habitNid(h['id'] as int), pn == null ? 'عادت: ${h['t']}' : '$pn می‌گه: وقتشه ${h['t']}!', (h['min'] ?? '').toString().isEmpty ? 'وقتشه! امروز انجامش بده 🔥' : 'حداقلش: ${h['min']}', nextDaily(r), daily: true);
+  final title = pn == null ? 'عادت: ${h['t']}' : '$pn می‌گه: وقتشه ${h['t']}!';
+  final body = (h['min'] ?? '').toString().isEmpty ? 'وقتشه! امروز انجامش بده 🔥' : 'حداقلش: ${h['min']}';
+  for (var i = 0; i < 10; i++) {
+    final t = DateTime(now.year, now.month, now.day + i, r ~/ 60, r % 60);
+    if (!t.isAfter(now)) continue;
+    if (i == 0 && hDoneG(h, today)) continue; // اگه امروز انجام شده، یادآوری نکن
+    await zs(habitNidD(h['id'] as int, i), title, body, tz.TZDateTime.from(t, tz.local));
+  }
 }
 
 Future<void> scheduleCheckin(int m) async {
@@ -3850,6 +4006,7 @@ Future<void> scheduleAll() async {
   }
   final h = prefs.getInt('hope') ?? -1;
   if (h >= 0) await scheduleHope(h);
+  showStatusNotif();
 }
 
 Future<void> askPerms() async {
@@ -3970,6 +4127,8 @@ Future<void> _initBackgroundServices() async {
   try {
     await HomeWidget.registerInteractivityCallback(widgetBackground);
   } catch (_) {}
+  Future.delayed(const Duration(seconds: 3), showStatusNotif);
+  Future.delayed(const Duration(seconds: 5), syncWsJob);
   try {
     await notif.initialize(
       const InitializationSettings(
@@ -4278,6 +4437,8 @@ class _H extends State<Home> with WidgetsBindingObserver {
       await prefs.setString('chkDay', today);
       if (mounted) checkinDialog();
     }
+    if (mounted && !_viaWidget) await _weeklySummary();
+    if (mounted) await _fixOverdue();
     if (mounted) _checkUpdate();
   }
 
@@ -4543,6 +4704,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     }
     if (s != AppLifecycleState.resumed) return;
     _pollWs();
+    _fixOverdue();
     _checkFocusFail();
     _checkUpdate();
     await prefs.reload();
@@ -4727,6 +4889,28 @@ class _H extends State<Home> with WidgetsBindingObserver {
                 child: SingleChildScrollView(
                     padding: const EdgeInsets.all(16),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.info_outline),
+                          title: const Text('نسخه‌ی برنامه'),
+                          subtitle: Text('$kVer${kBuild > 0 ? ' (ساخت $kBuild)' : ''}'),
+                          trailing: TextButton(
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _checkUpdate(manual: true);
+                              },
+                              child: const Text('بررسی بروزرسانی'))),
+                      SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('اعلان دائمی «اطلاعات روز»'),
+                          subtitle: const Text('تاریخ (شمسی/میلادی بسته به همین تنظیمات) و خلاصه‌ی روز توی نوار اعلان'),
+                          value: prefs.getBool('statusN') ?? true,
+                          onChanged: (v) {
+                            prefs.setBool('statusN', v);
+                            set(() {});
+                            showStatusNotif();
+                          }),
+                      const Divider(),
                       const Text('حالت نمایش', style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
                       SegmentedButton<int>(
@@ -4769,6 +4953,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
                             prefs.setBool('jal', v);
                             _setCalFrom(sel);
                             syncHomeWidget();
+                            showStatusNotif();
                             set(() {});
                             setState(() {});
                           }),
@@ -5431,13 +5616,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
               const Spacer(),
               TextButton(onPressed: _openWork, child: const Text('میز کار')),
             ])),
-        for (final w in wsT)
-          Card(
-              child: ListTile(
-                  leading: Checkbox(value: false, onChanged: (_) => _wsDone(w)),
-                  title: Text('${w['title']}'),
-                  subtitle: Text('💼 ${w['ws']}${w['due'] != null ? ' • مهلت: ${fd('${w['due']}')}' : ''}${((w['reward'] as num?) ?? 0) > 0 ? ' • 🪙 ${w['reward']} سکه' : ''}'),
-                  onTap: _openWork)),
+        for (final w in wsT) _wsCard(w),
         const SizedBox(height: 4),
       ],
       for (final e in ev)
@@ -5446,12 +5625,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
       for (final k in overdue) tile(k),
       if (overdue.isEmpty) const Text('کار عقب‌افتاده‌ای نداری.'),
       const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('نیاز به انجام', style: TextStyle(fontWeight: FontWeight.bold))),
-      if (needs.length > 1) const Padding(padding: EdgeInsets.only(bottom: 4), child: Text('برای اولویت‌بندی، هر کار رو نگه دار و بالا/پایین ببر', style: TextStyle(fontSize: 11, color: Colors.grey))),
+      if (needs.length > 1) const Padding(padding: EdgeInsets.only(bottom: 4), child: Text('برای اولویت‌بندی، آیکون ⠿ کنار هر کار رو بگیر و بالا/پایین ببر', style: TextStyle(fontSize: 11, color: Colors.grey))),
       if (needs.isEmpty) const Text('کار جدیدی برای انجام نداری.'),
       ReorderableListView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          buildDefaultDragHandles: true,
+          buildDefaultDragHandles: false,
           onReorder: (o, n2) {
             if (n2 > o) n2 -= 1;
             final it = needs.removeAt(o);
@@ -5461,7 +5640,13 @@ class _H extends State<Home> with WidgetsBindingObserver {
             }
             upd();
           },
-          children: [for (final k in needs) KeyedSubtree(key: ValueKey('ord${k['id']}'), child: tile(k))]),
+          children: [
+            for (var i = 0; i < needs.length; i++)
+              Row(key: ValueKey('ord${needs[i]['id']}'), children: [
+                ReorderableDragStartListener(index: i, child: const Padding(padding: EdgeInsets.all(10), child: Icon(Icons.drag_indicator, color: Colors.grey))),
+                Expanded(child: tile(needs[i])),
+              ])
+          ]),
       const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('انجام‌شده', style: TextStyle(fontWeight: FontWeight.bold))),
       for (final k in done) tile(k),
       if (done.isEmpty) const Text('هنوز کاری انجام‌شده ثبت نشده.'),
@@ -6623,8 +6808,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
                         if (!l.contains(today)) l.add(today);
                         sfx('done');
                         Gm.habitDone(h, today);
+                        notif.cancel(habitNidD(h['id'] as int, 0));
                       } else {
                         l.remove(today);
+                        scheduleHabit(h);
                       }
                       upd();
                     }))),
@@ -6677,7 +6864,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
     try {
       final r = Sb.rows(await Sb.req('GET', '/rest/v1/tasks', q: {
         'or': '(assignees.cs.{${Sb.uid}},assignee.eq.${Sb.uid})',
-        'select': 'id,title,workspace_id,due,status,assignee,assignees,done_by,reward,created_by',
+        'select': 'id,title,workspace_id,due,status,assignee,assignees,done_by,reward,created_by,subs',
         'order': 'created_at.desc'
       }));
       final mine = r.where((t) => !Sb.myDone(t)).toList();
@@ -6689,7 +6876,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
           if (m['role'] == 'manager') mgrWs.add('${m['workspace_id']}');
         }
       } catch (_) {}
-      final notifyOn = prefs.getBool('wsNotif') ?? true;
+      const notifyOn = false; // اعلان‌ها رو سرویس پس‌زمینه‌ی native می‌فرسته (حتی وقتی برنامه بسته است)
       final old = prefs.getStringList('wsSeen');
       final seen = (old ?? <String>[]).toSet();
       if (old != null && notifyOn) {
@@ -6701,7 +6888,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
         }
       }
       await prefs.setStringList('wsSeen', [for (final t in mine) '${t['id']}']);
-      await prefs.setString('wsTasks', jsonEncode([for (final t in mine) {'id': '${t['id']}', 'title': '${t['title']}', 'due': t['due'], 'ws': wsn['${t['workspace_id']}'] ?? '', 'reward': t['reward'] ?? 0}]));
+      await prefs.setString('wsTasks', jsonEncode([for (final t in mine) {'id': '${t['id']}', 'title': '${t['title']}', 'due': t['due'], 'ws': wsn['${t['workspace_id']}'] ?? '', 'reward': t['reward'] ?? 0, 'subs': t['subs'] ?? []}]));
       // اعلان رویدادها برای مدیر: تیک، گزارش، ارجاع، فایل
       if (mgrWs.isNotEmpty) {
         final since = prefs.getString('repSeen');
@@ -6722,6 +6909,47 @@ class _H extends State<Home> with WidgetsBindingObserver {
       if (mounted) setState(() {});
       syncHomeWidget();
     } catch (_) {}
+  }
+
+  Widget _wsCard(Map w) {
+    final subs = [for (final x in ((w['subs'] as List?) ?? [])) Map<String, dynamic>.from(x as Map)];
+    final sd = subs.where((e) => e['done'] == true).length;
+    final sub = Text('💼 ${w['ws']}${w['due'] != null ? ' • مهلت: ${fd('${w['due']}')}' : ''}${((w['reward'] as num?) ?? 0) > 0 ? ' • 🪙 ${w['reward']} سکه' : ''}${subs.isEmpty ? '' : ' • $sd/${subs.length} زیرمجموعه'}');
+    if (subs.isEmpty) {
+      return Card(child: ListTile(leading: Checkbox(value: false, onChanged: (_) => _wsDone(w)), title: Text('${w['title']}'), subtitle: sub, onTap: _openWork));
+    }
+    return Card(
+        child: ExpansionTile(
+            leading: Checkbox(value: false, onChanged: (_) => _wsDone(w)),
+            title: Text('${w['title']}'),
+            subtitle: sub,
+            children: [
+          for (var i = 0; i < subs.length; i++)
+            CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: subs[i]['done'] == true,
+                title: Text('${subs[i]['t']}', style: subs[i]['done'] == true ? const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey) : null),
+                onChanged: (v) => _wsSub(w, i, v == true)),
+          TextButton(onPressed: _openWork, child: const Text('باز کردن میز کار')),
+        ]));
+  }
+
+  Future<void> _wsSub(Map w, int i, bool v) async {
+    try {
+      final subs = [for (final x in ((w['subs'] as List?) ?? [])) Map<String, dynamic>.from(x as Map)];
+      subs[i]['done'] = v;
+      await Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${w['id']}'}, body: {'subs': subs, 'updated_at': DateTime.now().toUtc().toIso8601String()});
+      final l = wsCacheRead();
+      for (final x in l) {
+        if (x['id'] == w['id']) x['subs'] = subs;
+      }
+      await prefs.setString('wsTasks', jsonEncode(l));
+      if (v) sfx('done');
+      if (mounted) setState(() {});
+    } catch (e) {
+      toast(faErr(e));
+    }
   }
 
   Future<void> _wsDone(Map w) async {
@@ -6747,6 +6975,108 @@ class _H extends State<Home> with WidgetsBindingObserver {
   Future<void> _openWork() async {
     await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const WorkPage()));
     _pollWs();
+  }
+
+  bool _ovBusy = false;
+
+  Future<void> _newTime(Map k) async {
+    while (mounted) {
+      final d = await pickDate(context, initial: DateTime.now(), help: 'تاریخ جدید برای «${k['t']}»');
+      if (d == null) {
+        toast('باید یه زمان جدید انتخاب کنی');
+        continue;
+      }
+      if (!mounted) return;
+      final tm = await showTimePicker(context: context, initialTime: const TimeOfDay(hour: 9, minute: 0), helpText: 'ساعت جدید');
+      if (tm == null) {
+        toast('ساعت رو هم انتخاب کن');
+        continue;
+      }
+      final nr = DateTime(d.year, d.month, d.day, tm.hour, tm.minute);
+      if (!nr.isAfter(DateTime.now())) {
+        toast('زمان باید در آینده باشه');
+        continue;
+      }
+      k['r'] = nr.toIso8601String();
+      upd();
+      try {
+        await scheduleTask(k);
+      } catch (_) {}
+      toast('زمان جدید ثبت شد ✓');
+      return;
+    }
+  }
+
+  // کاری که عقب افتاده باید یا زمان جدید بگیره، یا انجام‌شده بشه، یا حذف
+  Future<void> _fixOverdue() async {
+    if (_ovBusy || !mounted || (prefs.getInt('fEnd') ?? 0) > 0) return;
+    _ovBusy = true;
+    try {
+      final now = DateTime.now(), today = ds(now);
+      final list = D.tasks.where((k) {
+        if (k['done'] == true || k['r'] == null || k['ovDay'] == today) return false;
+        try {
+          return DateTime.parse(k['r']).isBefore(now);
+        } catch (_) {
+          return false;
+        }
+      }).toList();
+      for (final k in list) {
+        if (!mounted) break;
+        k['ovDay'] = today;
+        await D.save();
+        final choice = await showDialog<String>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => PopScope(
+                canPop: false,
+                child: AlertDialog(
+                  title: const Text('⏰ کار عقب‌افتاده'),
+                  content: Text('«${k['t']}» موعدش گذشته (${fd(k['r'])}).\nبرای ادامه یکی از این‌ها رو انتخاب کن:'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, 'del'), child: const Text('حذف', style: TextStyle(color: Colors.red))),
+                    TextButton(onPressed: () => Navigator.pop(ctx, 'done'), child: const Text('انجام شده')),
+                    FilledButton(onPressed: () => Navigator.pop(ctx, 'new'), child: const Text('زمان جدید')),
+                  ],
+                )));
+        if (choice == 'done') {
+          toggle(k);
+        } else if (choice == 'del') {
+          delTask(k);
+        } else {
+          await _newTime(k);
+        }
+      }
+    } finally {
+      _ovBusy = false;
+    }
+  }
+
+  // ── خلاصه‌ی هفته‌ی گذشته ──
+  Future<void> _weeklySummary() async {
+    final wk = Mn.weekKey();
+    if (prefs.getString('wkSumSeen') == wk) return;
+    await prefs.setString('wkSumSeen', wk);
+    final wk0 = DateTime.parse(wk);
+    final ps = ds(wk0.subtract(const Duration(days: 7))), pe = wk;
+    final tdone = D.tasks.where((k) => k['done'] == true && k['doneAt'] is String && (k['doneAt'] as String).compareTo(ps) >= 0 && (k['doneAt'] as String).compareTo(pe) < 0).length;
+    final hticks = D.habits.fold<int>(0, (a, h) => a + (h['log'] as List).where((d) => '$d'.compareTo(ps) >= 0 && '$d'.compareTo(pe) < 0).length);
+    var focus = 0;
+    for (var i = 1; i <= 7; i++) {
+      focus += prefs.getInt('fd:${ds(wk0.subtract(Duration(days: i)))}') ?? 0;
+    }
+    final inc = sumR(ps, pe, true), exp = sumR(ps, pe, false);
+    if (tdone + hticks + focus + inc + exp == 0 || !mounted) return;
+    final moods = readMoods();
+    final ms = [for (var i = 1; i <= 7; i++) if (moods[ds(wk0.subtract(Duration(days: i)))] != null) ((moods[ds(wk0.subtract(Duration(days: i)))]['m'] as int?) ?? 2)];
+    final avg = ms.isEmpty ? '—' : const ['😞', '😕', '😐', '🙂', '😄'][(ms.reduce((a, b) => a + b) / ms.length).round().clamp(0, 4).toInt()];
+    await showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('📊 خلاصه‌ی هفته‌ی گذشته'),
+              content: Text('✅ $tdone کار انجام دادی\n🔥 $hticks بار عادت‌هات رو تیک زدی\n🧠 $focus دقیقه تمرکز کردی\n💰 درآمد ${n(inc)} • 💸 هزینه ${n(exp)}\n🙂 میانگین حال: $avg\n\nهفته‌ی خوبی داشته باشی!', style: const TextStyle(height: 1.8)),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ممنون'))],
+            ));
   }
 
   // ── تاریخچه‌ی روزها ──
@@ -7180,7 +7510,6 @@ class _H extends State<Home> with WidgetsBindingObserver {
 
   Future<void> createHeroSheet() async {
     final first = Gm.heroes.isEmpty;
-    var animal = gAnimals.first.id;
     var premium = false;
     final name = TextEditingController();
     await showModalBottomSheet(
@@ -7192,17 +7521,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
                   padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
                   child: SingleChildScrollView(
                       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                    const Text('تخمت رو انتخاب کن 🥚', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    const SizedBox(height: 12),
-                    Wrap(alignment: WrapAlignment.center, spacing: 10, runSpacing: 10, children: [
-                      for (final a in gAnimals)
-                        ChoiceChip(
-                            label: Column(children: [Text(a.emoji, style: const TextStyle(fontSize: 34)), Text(a.name)]),
-                            selected: animal == a.id,
-                            onSelected: (_) => set(() => animal = a.id)),
-                    ]),
+                    const Text('یه تخم بگیر 🥚', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     const SizedBox(height: 8),
-                    Text('غذای محبوب ${animalById(animal).name}: ${gItems.where((i) => i.love == animalById(animal).love).map((i) => '${i.emoji} ${i.name}').join('، ')} (۱٫۵ برابر تجربه)', style: const TextStyle(fontSize: 12)),
+                    const Center(child: PxEmoji('🥚', 72)),
+                    const Text('حیوون داخل تخم شانسیه و موقع باز شدن مشخص می‌شه! (گربه، سگ، اژدها، کلاغ، مار یا گرگ)', textAlign: TextAlign.center, style: TextStyle(fontSize: 12)),
                     const SizedBox(height: 8),
                     SegmentedButton<bool>(
                         segments: [
@@ -7224,11 +7546,11 @@ class _H extends State<Home> with WidgetsBindingObserver {
                             return;
                           }
                           Gm.coins -= cost;
-                          Gm.create(animal, nm, rollRarity(premium));
+                          Gm.create(gAnimals[math.Random().nextInt(gAnimals.length)].id, nm, rollRarity(premium));
                           sfx('add');
                           Navigator.pop(ctx);
                           setState(() {});
-                          toast('تخمت آماده‌ست! سه بار روش بزن 🥚');
+                          toast('تخمت آماده‌ست! سه بار روش بزن تا ببینی چی داخلشه 🥚');
                         },
                         child: Text(cost == 0 ? 'گرفتن تخم' : 'گرفتن تخم ($cost سکه)')),
                   ])));
@@ -7498,6 +7820,40 @@ class _H extends State<Home> with WidgetsBindingObserver {
         final gear = gItems.where((i) => i.slot != 'food' && (Gm.inv[i.id] ?? 0) > 0).toList();
         final food = gItems.where((i) => i.slot == 'food' && (Gm.inv[i.id] ?? 0) > 0).toList();
         if (gear.isEmpty && food.isEmpty) kids.add(const Padding(padding: EdgeInsets.all(16), child: Text('کوله‌پشتی خالیه؛ از فروشگاه خرید کن.')));
+        if (food.isNotEmpty) kids.add(head('غذاها'));
+        for (final it in food) {
+          final loved = it.love.isNotEmpty && animalById('${h['a']}').love == it.love;
+          kids.add(ListTile(
+              dense: true,
+              leading: PxEmoji(it.emoji, 38),
+              title: Text('${it.name} × ${Gm.inv[it.id]}'),
+              subtitle: Text('${loved ? '+${(it.xp * 1.5).round()} تجربه (محبوبشه 😍)' : '+${it.xp} تجربه'} • 🍖 +${foodSat(it)} سیری'),
+              trailing: FilledButton.tonal(
+                  onPressed: () async {
+                    if (!hatched) {
+                      toast('اول تخم رو باز کن 🥚');
+                      return;
+                    }
+                    await _toStage();
+                    final st = stageKey.currentState;
+                    void eatNow() {
+                      final m = Gm.feed(h, it);
+                      if (m.isNotEmpty) toast(m);
+                      if (mounted) setState(() {});
+                    }
+
+                    if (st == null) {
+                      eatNow(); // اگه صحنه در دسترس نبود، بدون انیمیشن هم غذا داده می‌شه
+                      return;
+                    }
+                    if (st.busy) {
+                      toast('پت داره مشغوله؛ یه لحظه صبر کن');
+                      return;
+                    }
+                    st.feed(it, eatNow);
+                  },
+                  child: const Text('غذا دادن'))));
+        }
         if (gear.isNotEmpty) kids.add(head('آیتم‌ها'));
         if (gear.any((i) => i.slot == 'bg'))
           kids.add(ListTile(
@@ -7533,40 +7889,6 @@ class _H extends State<Home> with WidgetsBindingObserver {
               title: Text(it.name),
               subtitle: Text(slotNames[it.slot]!),
               trailing: on ? OutlinedButton(onPressed: tgl, child: Text(it.slot == 'bg' ? 'غیرفعال' : 'درآوردن')) : FilledButton.tonal(onPressed: tgl, child: Text(it.slot == 'bg' ? 'انتخاب' : 'پوشاندن'))));
-        }
-        if (food.isNotEmpty) kids.add(head('غذاها'));
-        for (final it in food) {
-          final loved = it.love.isNotEmpty && animalById('${h['a']}').love == it.love;
-          kids.add(ListTile(
-              dense: true,
-              leading: PxEmoji(it.emoji, 38),
-              title: Text('${it.name} × ${Gm.inv[it.id]}'),
-              subtitle: Text('${loved ? '+${(it.xp * 1.5).round()} تجربه (محبوبشه 😍)' : '+${it.xp} تجربه'} • 🍖 +${foodSat(it)} سیری'),
-              trailing: FilledButton.tonal(
-                  onPressed: () async {
-                    if (!hatched) {
-                      toast('اول تخم رو باز کن 🥚');
-                      return;
-                    }
-                    await _toStage();
-                    final st = stageKey.currentState;
-                    void eatNow() {
-                      final m = Gm.feed(h, it);
-                      if (m.isNotEmpty) toast(m);
-                      if (mounted) setState(() {});
-                    }
-
-                    if (st == null) {
-                      eatNow(); // اگه صحنه در دسترس نبود، بدون انیمیشن هم غذا داده می‌شه
-                      return;
-                    }
-                    if (st.busy) {
-                      toast('پت داره مشغوله؛ یه لحظه صبر کن');
-                      return;
-                    }
-                    st.feed(it, eatNow);
-                  },
-                  child: const Text('غذا دادن'))));
         }
       } else if (hv == 3) {
         kids.add(const Padding(padding: EdgeInsets.all(4), child: Text('رنگ پت رو با سکه عوض کن. رنگ‌هایی که خریدی همیشه برای همین پت می‌مونن و می‌تونی بینشون جابه‌جا بشی.', style: TextStyle(fontSize: 12))));
