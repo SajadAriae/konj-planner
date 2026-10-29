@@ -270,7 +270,15 @@ class Gm {
   }
   static void say(String m, [bool big = false]) => onEvent?.call(m, big);
 
+  static String _sig = '';
+  static bool loadIfChanged() {
+    if ('${prefs.getString('hero')}' == _sig) return false;
+    load();
+    return true;
+  }
+
   static void load() {
+    _sig = '${prefs.getString('hero')}';
     heroes = [];
     inv = {};
     rw = {};
@@ -308,8 +316,10 @@ class Gm {
   static Future<void> save() async {
     final cut = ds(DateTime.now().subtract(const Duration(days: 45)));
     rw.removeWhere((k) => k.startsWith('h:') && k.split(':').last.compareTo(cut) < 0);
-    syncPetWidget();
-    await prefs.setString('hero', jsonEncode({'coins': coins, 'active': active, 'focus': focusTotal, 'pool': pool, 'heroes': heroes, 'inv': inv, 'rw': rw.toList(), 'bg': bg, 'album': album.toList()}));
+    syncPetWidgetSoon();
+    final heroJson = jsonEncode({'coins': coins, 'active': active, 'focus': focusTotal, 'pool': pool, 'heroes': heroes, 'inv': inv, 'rw': rw.toList(), 'bg': bg, 'album': album.toList()});
+    _sig = heroJson;
+    await prefs.setString('hero', heroJson);
   }
 
   static void addXp(int x, {bool raw = false}) {
@@ -2523,12 +2533,27 @@ class _WsPageState extends State<WsPage> {
                                           tooltip: lead ? 'برداشتن سرگروهی' : 'سرگروه کردن',
                                           icon: Icon(lead ? Icons.star : Icons.star_border, color: lead ? Colors.amber : null),
                                           onPressed: () async {
-                                            if (row == null) {
-                                              await _act(() => Sb.req('POST', '/rest/v1/project_members', body: {'project_id': p['id'], 'workspace_id': wid, 'user_id': uid, 'is_lead': true}));
-                                            } else {
-                                              await _act(() => Sb.req('PATCH', '/rest/v1/project_members', q: {'project_id': 'eq.${p['id']}', 'user_id': 'eq.$uid'}, body: {'is_lead': !lead}));
-                                            }
+                                            final nv = !lead;
+                                            setState(() {
+                                              if (row == null) {
+                                                pmembers.add({'project_id': p['id'], 'workspace_id': wid, 'user_id': uid, 'is_lead': true});
+                                              } else {
+                                                row['is_lead'] = nv;
+                                              }
+                                            });
                                             set(() {});
+                                            try {
+                                              if (row == null) {
+                                                await Sb.req('POST', '/rest/v1/project_members', body: {'project_id': p['id'], 'workspace_id': wid, 'user_id': uid, 'is_lead': true});
+                                              } else {
+                                                await Sb.req('PATCH', '/rest/v1/project_members', q: {'project_id': 'eq.${p['id']}', 'user_id': 'eq.$uid'}, body: {'is_lead': nv});
+                                              }
+                                            } catch (e) {
+                                              snack(faErr(e));
+                                            }
+                                            _load(silent: true).then((_) {
+                                              if (ctx.mounted) set(() {});
+                                            });
                                           })
                                       : null,
                                   onChanged: (v) async {
@@ -2536,12 +2561,26 @@ class _WsPageState extends State<WsPage> {
                                       snack('فقط مدیر می‌تونه سرگروه رو کم کنه');
                                       return;
                                     }
-                                    if (v == true) {
-                                      await _act(() => Sb.req('POST', '/rest/v1/project_members', body: {'project_id': p['id'], 'workspace_id': wid, 'user_id': uid, 'is_lead': false}));
-                                    } else {
-                                      await _act(() => Sb.req('DELETE', '/rest/v1/project_members', q: {'project_id': 'eq.${p['id']}', 'user_id': 'eq.$uid'}));
-                                    }
+                                    setState(() {
+                                      if (v == true) {
+                                        pmembers.add({'project_id': p['id'], 'workspace_id': wid, 'user_id': uid, 'is_lead': false});
+                                      } else {
+                                        pmembers.removeWhere((x) => x['project_id'] == p['id'] && '${x['user_id']}' == uid);
+                                      }
+                                    });
                                     set(() {});
+                                    try {
+                                      if (v == true) {
+                                        await Sb.req('POST', '/rest/v1/project_members', body: {'project_id': p['id'], 'workspace_id': wid, 'user_id': uid, 'is_lead': false});
+                                      } else {
+                                        await Sb.req('DELETE', '/rest/v1/project_members', q: {'project_id': 'eq.${p['id']}', 'user_id': 'eq.$uid'});
+                                      }
+                                    } catch (e) {
+                                      snack(faErr(e));
+                                    }
+                                    _load(silent: true).then((_) {
+                                      if (ctx.mounted) set(() {});
+                                    });
                                   });
                             }),
                         ])),
@@ -2646,6 +2685,13 @@ class _WsPageState extends State<WsPage> {
   }
 
   Future<void> _toggleMine(Map t, bool done) async {
+    final a = Sb.asg(t);
+    final d0 = Sb.doneBy(t).where((x) => x != Sb.uid).toList();
+    if (done) d0.add(Sb.uid);
+    setState(() {
+      t['done_by'] = d0;
+      t['status'] = a.isNotEmpty && a.every(d0.contains) ? 'done' : (d0.isNotEmpty ? 'doing' : 'todo');
+    });
     await _act(() async {
       await Sb.markMine(t, done);
       if (done) {
@@ -2721,8 +2767,10 @@ class _WsPageState extends State<WsPage> {
                                 onChanged: (mine || canEditTask(cur))
                                     ? (v) async {
                                         subs[i]['done'] = v == true;
+                                        cur['subs'] = subs;
+                                        set(() {});
                                         await _act(() => Sb.req('PATCH', '/rest/v1/tasks', q: {'id': 'eq.${cur['id']}'}, body: {'subs': subs, 'updated_at': DateTime.now().toUtc().toIso8601String()}));
-                                        set(() => reload++);
+                                        if (ctx.mounted) set(() {});
                                       }
                                     : null),
                         ],
@@ -3269,14 +3317,12 @@ Future<void> scheduleFocusRem() async {
 }
 
 const int kBuild = int.fromEnvironment('BUILD', defaultValue: 0);
-const String kAppVer = '1.0.10';
+const String kAppVer = '1.0.11';
 const kWhatsNew = [
-  '📅 اعلان دائمی «اطلاعات روز» با تاریخ شمسی/میلادی توی نوار اعلان',
-  '👥 میز کار: سرگروه برای هر پروژه، اعضای پروژه و تیک زیرمجموعه‌ها توی بخش وظایف',
-  '🔔 اعلان وظیفه‌ی جدید و رویدادها حتی وقتی برنامه بسته است',
-  '⏰ عادت انجام‌شده دیگه یادآوری نمی‌کنه و کار عقب‌افتاده باید زمان جدید بگیره',
-  '🥚 حیوون داخل تخم شانسیه و غذاها اول کوله‌پشتی هستن',
-  '📊 خلاصه‌ی هفتگی، شماره‌ی نسخه توی تنظیمات و رفع باگ جابه‌جایی کارها',
+  '🏃 دو بازی جدید برای پت: «پرش» و «ضربه‌ی سریع» (روزی ۲ بار)',
+  '📅 آیکون اعلان دائمی حالا عدد روز رو نشون می‌ده',
+  '✏️ رفع باگ ثبت نشدن زمان جدید و ویرایش کارها',
+  '⚡ جابه‌جایی کارها بدون پرش و تیک اعضا و ستاره سریع‌تر شد',
 ];
 
 class UpdInfo {
@@ -3332,6 +3378,306 @@ List<Map<String, dynamic>> wsCacheRead() {
     return [for (final e in (jsonDecode(prefs.getString('wsTasks') ?? '[]') as List)) Map<String, dynamic>.from(e as Map)];
   } catch (_) {
     return [];
+  }
+}
+
+// ───────────── بازی پرش ─────────────
+class JumpGame extends StatefulWidget {
+  final Map hero;
+  const JumpGame({super.key, required this.hero});
+  @override
+  State<JumpGame> createState() => _JumpGameState();
+}
+
+class _JumpGameState extends State<JumpGame> with SingleTickerProviderStateMixin {
+  static const maxPlays = 2;
+  static const obsEmoji = ['🌵', '🪨', '🔥'];
+  late final Ticker _tk;
+  Duration _last = Duration.zero;
+  final _rnd = math.Random();
+  final obs = <List<dynamic>>[]; // [x, emoji]
+  double y = 0, vy = 0, dist = 0, spawn = 1.0;
+  bool started = false, over = false, ready = false;
+  String result = '';
+  int get score => (dist * 12).floor();
+  String get _key => 'jp:${ds(DateTime.now())}';
+  int get plays => prefs.getInt(_key) ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _tk = createTicker(_tick)..start();
+    Future.wait([for (final e in obsEmoji) pixelEmoji(e)]).whenComplete(() {
+      if (mounted) setState(() => ready = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _tk.dispose();
+    super.dispose();
+  }
+
+  void _start() {
+    if (!ready || plays >= maxPlays) return;
+    prefs.setInt(_key, plays + 1);
+    setState(() {
+      started = true;
+      over = false;
+      obs.clear();
+      y = 0;
+      vy = 0;
+      dist = 0;
+      spawn = 1.0;
+    });
+  }
+
+  void _jump() {
+    if (!started || over || y > .001) return;
+    vy = 1.5;
+    sfx('add');
+  }
+
+  void _tick(Duration d) {
+    final dt = ((d - _last).inMicroseconds / 1e6).clamp(0.0, .05).toDouble();
+    _last = d;
+    if (!started || over) return;
+    final speed = .36 + math.min(.5, dist * .012);
+    vy -= 4.8 * dt;
+    y += vy * dt;
+    if (y <= 0) {
+      y = 0;
+      vy = 0;
+    }
+    dist += speed * dt;
+    spawn -= dt;
+    if (spawn <= 0) {
+      obs.add([1.1, obsEmoji[_rnd.nextInt(obsEmoji.length)]]);
+      spawn = math.max(.7, 1.5 - dist * .02) + _rnd.nextDouble() * .7;
+    }
+    for (final o in obs) {
+      o[0] = (o[0] as double) - speed * dt;
+    }
+    obs.removeWhere((o) => (o[0] as double) < -.15);
+    for (final o in obs) {
+      if (((o[0] as double) - .22).abs() < .05 && y < .08) {
+        over = true;
+        _finish();
+        break;
+      }
+    }
+    setState(() {});
+  }
+
+  void _finish() {
+    final sc = score;
+    final c = math.min(20, sc ~/ 6);
+    if (c > 0) {
+      result = 'امتیاز: $sc\nجایزه: +$c سکه 🪙';
+      Gm.earn(c, sc ~/ 3, '+$c سکه 🪙 (بازی پرش)');
+    } else {
+      result = 'امتیاز: $sc\nدفعه‌ی بعد بیشتر بدو!';
+    }
+    final rest = maxPlays - plays;
+    result += rest > 0 ? '\n$rest بار دیگه امروز می‌تونی بازی کنی.' : '\nسهم امروزت تموم شد؛ فردا دوباره بیا 🌙';
+    sfx(c > 5 ? 'hatch' : 'fail');
+    Mn.inc('game');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locked = plays >= maxPlays && !started;
+    return Scaffold(
+        backgroundColor: Colors.black,
+        body: LayoutBuilder(builder: (c, cons) {
+          final W = cons.maxWidth, H = cons.maxHeight;
+          return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: (_) => _jump(),
+              child: SizedBox(
+                  width: W,
+                  height: H,
+                  child: Stack(fit: StackFit.expand, clipBehavior: Clip.hardEdge, children: [
+                    Positioned.fill(child: RepaintBoundary(child: CustomPaint(painter: ScenePainter(Gm.bg, isNight(), seasonNow(), const AlwaysStoppedAnimation<double>(0))))),
+                    for (final o in obs) Positioned(left: (o[0] as double) * W - 22, bottom: H * .2 - 6, width: 44, height: 44, child: PxEmoji('${o[1]}', 44)),
+                    Positioned(left: W * .22 - 60, bottom: H * .2 - 10 + y * H, width: 120, height: 120, child: petCanvas(widget.hero, size: 120, face: y > .001 ? 'happy' : 'idle')),
+                    Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: SafeArea(
+                            child: Padding(
+                                padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                                child: Row(children: [
+                                  IconButton(icon: const Icon(Icons.close), color: Colors.white, onPressed: () => Navigator.pop(context)),
+                                  Expanded(child: Text('امتیاز: $score', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, shadows: [Shadow(blurRadius: 4)]))),
+                                ])))),
+                    if (!started || over)
+                      Center(
+                          child: Card(
+                              margin: const EdgeInsets.all(24),
+                              child: Padding(
+                                  padding: const EdgeInsets.all(20),
+                                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                                    Text(over ? 'بازی تموم شد' : 'بازی پرش 🏃', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                                    const SizedBox(height: 8),
+                                    Text(over ? result : (locked ? 'امروز $maxPlays بار بازی کردی. فردا دوباره بیا 🌙' : 'پتت می‌دوئه؛ هر جای صفحه بزنی می‌پره.\nاز 🌵 🪨 🔥 بپر!\nروزی فقط $maxPlays بار (${maxPlays - plays} بار مونده).'), textAlign: TextAlign.center),
+                                    const SizedBox(height: 12),
+                                    FilledButton(onPressed: over || locked ? () => Navigator.pop(context) : (ready ? _start : null), child: Text(over || locked ? 'بستن' : (ready ? 'شروع' : 'در حال آماده‌سازی…'))),
+                                  ])))),
+                  ])));
+        }));
+  }
+}
+
+// ───────────── بازی ضربه‌ی سریع ─────────────
+class WhackGame extends StatefulWidget {
+  const WhackGame({super.key});
+  @override
+  State<WhackGame> createState() => _WhackGameState();
+}
+
+class _WhackGameState extends State<WhackGame> with SingleTickerProviderStateMixin {
+  static const total = 25.0;
+  static const maxPlays = 2;
+  static const foods = ['🍎', '🐟', '🍖', '🍪', '🥚'];
+  late final Ticker _tk;
+  Duration _last = Duration.zero;
+  final _rnd = math.Random();
+  final cell = List<String>.filled(9, '');
+  final ttl = List<double>.filled(9, 0);
+  double left = total, spawn = .4;
+  int score = 0, lives = 3;
+  bool started = false, over = false, ready = false;
+  String result = '';
+  String get _key => 'wh:${ds(DateTime.now())}';
+  int get plays => prefs.getInt(_key) ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _tk = createTicker(_tick)..start();
+    Future.wait([for (final e in [...foods, '🍰', '💣']) pixelEmoji(e)]).whenComplete(() {
+      if (mounted) setState(() => ready = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _tk.dispose();
+    super.dispose();
+  }
+
+  void _start() {
+    if (!ready || plays >= maxPlays) return;
+    prefs.setInt(_key, plays + 1);
+    setState(() {
+      started = true;
+      over = false;
+      score = 0;
+      lives = 3;
+      left = total;
+      spawn = .4;
+      for (var i = 0; i < 9; i++) {
+        cell[i] = '';
+        ttl[i] = 0;
+      }
+    });
+  }
+
+  void _tick(Duration d) {
+    final dt = ((d - _last).inMicroseconds / 1e6).clamp(0.0, .05).toDouble();
+    _last = d;
+    if (!started || over) return;
+    left -= dt;
+    spawn -= dt;
+    final prog = (total - left) / total;
+    for (var i = 0; i < 9; i++) {
+      if (cell[i].isNotEmpty) {
+        ttl[i] -= dt;
+        if (ttl[i] <= 0) cell[i] = '';
+      }
+    }
+    if (spawn <= 0) {
+      spawn = math.max(.3, .8 - prog * .45);
+      final free = [for (var i = 0; i < 9; i++) if (cell[i].isEmpty) i];
+      if (free.isNotEmpty) {
+        final i = free[_rnd.nextInt(free.length)];
+        final r = _rnd.nextDouble();
+        cell[i] = r < .2 ? '💣' : (r < .3 ? '🍰' : foods[_rnd.nextInt(foods.length)]);
+        ttl[i] = math.max(.65, 1.2 - prog * .5);
+      }
+    }
+    if (left <= 0 || lives <= 0) {
+      left = math.max(0, left);
+      over = true;
+      _finish();
+    }
+    setState(() {});
+  }
+
+  void _hit(int i) {
+    if (!started || over || cell[i].isEmpty) return;
+    final e = cell[i];
+    cell[i] = '';
+    if (e == '💣') {
+      lives--;
+      sfx('delete');
+    } else {
+      score += e == '🍰' ? 3 : 1;
+      sfx('munch');
+    }
+    setState(() {});
+  }
+
+  void _finish() {
+    final c = math.min(20, score);
+    if (c > 0) {
+      result = 'امتیاز: $score\nجایزه: +$c سکه 🪙';
+      Gm.earn(c, score ~/ 2, '+$c سکه 🪙 (بازی ضربه)');
+    } else {
+      result = 'امتیاز: $score\nدفعه‌ی بعد!';
+    }
+    final rest = maxPlays - plays;
+    result += rest > 0 ? '\n$rest بار دیگه امروز می‌تونی بازی کنی.' : '\nسهم امروزت تموم شد؛ فردا دوباره بیا 🌙';
+    sfx(c > 8 ? 'hatch' : 'done');
+    Mn.inc('game');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final locked = plays >= maxPlays && !started;
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+        appBar: AppBar(title: Text('امتیاز: $score   ${'❤️' * lives}   ${left.ceil()}s')),
+        body: Stack(children: [
+          GridView.count(
+              padding: const EdgeInsets.all(20),
+              crossAxisCount: 3,
+              mainAxisSpacing: 14,
+              crossAxisSpacing: 14,
+              children: [
+                for (var i = 0; i < 9; i++)
+                  GestureDetector(
+                      onTapDown: (_) => _hit(i),
+                      child: Container(
+                          decoration: BoxDecoration(shape: BoxShape.circle, color: cs.secondaryContainer, border: Border.all(color: cs.outline, width: 3)),
+                          child: Center(child: cell[i].isEmpty ? const SizedBox.shrink() : PxEmoji(cell[i], 56)))),
+              ]),
+          if (!started || over)
+            Center(
+                child: Card(
+                    margin: const EdgeInsets.all(24),
+                    child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          Text(over ? 'بازی تموم شد' : 'ضربه‌ی سریع 👆', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          Text(over ? result : (locked ? 'امروز $maxPlays بار بازی کردی. فردا دوباره بیا 🌙' : 'غذاها از سوراخ‌ها بیرون می‌پرن؛ زود بزنشون!\n🍰 سه امتیاز داره، از 💣 دوری کن (۳ جون).\nروزی فقط $maxPlays بار (${maxPlays - plays} بار مونده).'), textAlign: TextAlign.center),
+                          const SizedBox(height: 12),
+                          FilledButton(onPressed: over || locked ? () => Navigator.pop(context) : (ready ? _start : null), child: Text(over || locked ? 'بستن' : (ready ? 'شروع' : 'در حال آماده‌سازی…'))),
+                        ])))),
+        ]));
   }
 }
 
@@ -3586,6 +3932,15 @@ class D {
     }
   }
 
+  static String _sig = '';
+  static String _cur() => '${prefs.getString('tasks')}|${prefs.getString('events')}|${prefs.getString('txs')}|${prefs.getString('goals')}|${prefs.getString('habits')}';
+
+  static bool loadIfChanged() {
+    if (_cur() == _sig) return false;
+    load();
+    return true;
+  }
+
   static void load() {
     tasks = _readList('tasks');
     events = _readList('events');
@@ -3622,6 +3977,7 @@ class D {
       g['deadline'] ??= ds(DateTime.now());
     }
     prefs.setInt('ver', kVer);
+    _sig = _cur();
   }
 
   static Future<void> save() async {
@@ -3630,6 +3986,7 @@ class D {
     await prefs.setString('txs', jsonEncode(txs));
     await prefs.setString('goals', jsonEncode(goals));
     await prefs.setString('habits', jsonEncode(habits));
+    _sig = _cur();
     await prefs.setString('cats', jsonEncode(cats));
   }
 
@@ -3716,7 +4073,7 @@ Future<void> showStatusNotif() async {
     String title(DateTime d) => jal ? fdl(d) : '${wdn[d.weekday]} ${d.day} ${gmn[d.month - 1]} ${d.year}';
     final other = jal ? 'میلادی: ${ds(now)}' : 'شمسی: ${fd(today)}';
     final body = '$other\nکار باز: $open • عقب‌افتاده: $overdue\nعادت امروز: $hd از ${D.habits.length}${ws > 0 ? ' • وظیفه‌ی میز کار: $ws' : ''}\nسکه: ${n(Gm.coins)} 🪙\n${hopeFor(now)}';
-    final det = NotificationDetails(
+    NotificationDetails detFor(String icon) => NotificationDetails(
         android: AndroidNotificationDetails('konj_status_v1', 'اطلاعات روز',
             channelDescription: 'تاریخ و خلاصه‌ی روز؛ همیشه توی نوار اعلان می‌مونه',
             importance: Importance.low,
@@ -3727,17 +4084,42 @@ Future<void> showStatusNotif() async {
             playSound: false,
             enableVibration: false,
             onlyAlertOnce: true,
-            icon: 'ic_notif',
+            icon: icon,
             visibility: NotificationVisibility.public,
             styleInformation: BigTextStyleInformation(body)));
-    await notif.show(9000, '📅 ${title(now)}', '$other • کار باز: $open • عادت: $hd/${D.habits.length}', det);
-    // نیمه‌شب تاریخ خودش عوض شه
+    int dayNum(DateTime d) => jal ? g2j(d.year, d.month, d.day)[2] : d.day;
+    final head = '📅 ${title(now)}', line = '$other • کار باز: $open • عادت: $hd/${D.habits.length}';
+    try {
+      await notif.show(9000, head, line, detFor('ic_day_${dayNum(now)}'));
+    } catch (_) {
+      await notif.show(9000, head, line, detFor('ic_notif')); // اگه آیکون روز پیدا نشد
+    }
+    // نیمه‌شب تاریخ و آیکون خودش عوض شه
     final nx = DateTime(now.year, now.month, now.day + 1, 0, 5);
-    await zs(9000, '📅 ${title(nx)}', 'آمار امروز رو با باز کردن برنامه ببین', tz.TZDateTime.from(nx, tz.local), det: det);
+    await zs(9000, '📅 ${title(nx)}', 'آمار امروز رو با باز کردن برنامه ببین', tz.TZDateTime.from(nx, tz.local), det: detFor('ic_day_${dayNum(nx)}'));
   } catch (_) {}
 }
 
+Timer? _syncT, _petT;
+bool _bgIsolate = false;
+
 Future<void> syncHomeWidget() async {
+  if (_bgIsolate) return syncHomeWidgetNow();
+  _syncT?.cancel();
+  _syncT = Timer(const Duration(milliseconds: 1500), () {
+    syncHomeWidgetNow();
+  });
+}
+
+void syncPetWidgetSoon() {
+  if (_bgIsolate) return;
+  _petT?.cancel();
+  _petT = Timer(const Duration(seconds: 3), () {
+    syncPetWidget();
+  });
+}
+
+Future<void> syncHomeWidgetNow() async {
   try {
     final now = DateTime.now(), today = ds(now);
     final open = D.tasks.where((k) => k['done'] != true).length;
@@ -3785,6 +4167,7 @@ Future<void> widgetBackground(Uri? uri) async {
   if (uri == null || uri.pathSegments.isEmpty) return;
   if (uri.host != 'done' && uri.host != 'habit' && uri.host != 'wtask') return;
   WidgetsFlutterBinding.ensureInitialized();
+  _bgIsolate = true;
   prefs = await SharedPreferences.getInstance();
   await prefs.reload();
   if (uri.host == 'wtask') {
@@ -4705,16 +5088,16 @@ class _H extends State<Home> with WidgetsBindingObserver {
     }
     if (s != AppLifecycleState.resumed) return;
     _pollWs();
-    _fixOverdue();
     _checkFocusFail();
     _checkUpdate();
     await prefs.reload();
-    D.load();
-    Gm.load();
+    D.loadIfChanged();
+    Gm.loadIfChanged();
     _focusResume();
     if (mounted) setState(() {});
     scheduleAll();
     syncHomeWidget();
+    _fixOverdue();
   }
 
   void _widgetUri(Uri? u) {
@@ -4754,9 +5137,9 @@ class _H extends State<Home> with WidgetsBindingObserver {
   void openGuide() => Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => const Guide()));
 
   Future<void> upd() async {
+    if (mounted) setState(() {}); // اول صفحه رو نشون بده، بعد ذخیره و همگام‌سازی (بدون معطلی)
     await D.save();
-    await syncHomeWidget();
-    if (mounted) setState(() {});
+    syncHomeWidget();
   }
 
   // ── سطل بازیافت: هر چیزی که حذف می‌شه ۱۰ دقیقه قابل بازگردانیه ──
@@ -5502,7 +5885,7 @@ class _H extends State<Home> with WidgetsBindingObserver {
       k = <String, dynamic>{'id': DateTime.now().millisecondsSinceEpoch ~/ 1000, 'done': false, 'star': false};
       D.tasks.add(k);
     } else {
-      k = o;
+      k = D.tasks.where((x) => x['id'] == o['id']).firstOrNull ?? o;
       notif.cancel(taskNid(k['id'] as int));
     }
     k['t'] = title.text.trim();
@@ -5626,12 +6009,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
       for (final k in overdue) tile(k),
       if (overdue.isEmpty) const Text('کار عقب‌افتاده‌ای نداری.'),
       const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('نیاز به انجام', style: TextStyle(fontWeight: FontWeight.bold))),
-      if (needs.length > 1) const Padding(padding: EdgeInsets.only(bottom: 4), child: Text('برای اولویت‌بندی، آیکون ⠿ کنار هر کار رو بگیر و بالا/پایین ببر', style: TextStyle(fontSize: 11, color: Colors.grey))),
+      if (needs.length > 1) const Padding(padding: EdgeInsets.only(bottom: 4), child: Text('برای اولویت‌بندی، هر کار رو نگه دار و بالا/پایین ببر', style: TextStyle(fontSize: 11, color: Colors.grey))),
       if (needs.isEmpty) const Text('کار جدیدی برای انجام نداری.'),
       ReorderableListView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          buildDefaultDragHandles: false,
+          buildDefaultDragHandles: true,
           onReorder: (o, n2) {
             if (n2 > o) n2 -= 1;
             final it = needs.removeAt(o);
@@ -5639,15 +6022,10 @@ class _H extends State<Home> with WidgetsBindingObserver {
             for (var i = 0; i < needs.length; i++) {
               needs[i]['ord'] = i;
             }
-            upd();
+            setState(() {});
+            D.save();
           },
-          children: [
-            for (var i = 0; i < needs.length; i++)
-              Row(key: ValueKey('ord${needs[i]['id']}'), children: [
-                ReorderableDragStartListener(index: i, child: const Padding(padding: EdgeInsets.all(10), child: Icon(Icons.drag_indicator, color: Colors.grey))),
-                Expanded(child: tile(needs[i])),
-              ])
-          ]),
+          children: [for (final k in needs) KeyedSubtree(key: ValueKey('ord${k['id']}'), child: tile(k))]),
       const Padding(padding: EdgeInsets.only(top: 16, bottom: 4), child: Text('انجام‌شده', style: TextStyle(fontWeight: FontWeight.bold))),
       for (final k in done) tile(k),
       if (done.isEmpty) const Text('هنوز کاری انجام‌شده ثبت نشده.'),
@@ -6998,10 +7376,12 @@ class _H extends State<Home> with WidgetsBindingObserver {
         toast('زمان باید در آینده باشه');
         continue;
       }
-      k['r'] = nr.toIso8601String();
-      upd();
+      final cur = D.tasks.where((x) => x['id'] == k['id']).firstOrNull ?? k;
+      cur['r'] = nr.toIso8601String();
+      await upd();
       try {
-        await scheduleTask(k);
+        notif.cancel(taskNid(cur['id'] as int));
+        await scheduleTask(cur);
       } catch (_) {}
       toast('زمان جدید ثبت شد ✓');
       return;
@@ -7022,8 +7402,9 @@ class _H extends State<Home> with WidgetsBindingObserver {
           return false;
         }
       }).toList();
-      for (final k in list) {
+      for (final k0 in list) {
         if (!mounted) break;
+        final k = D.tasks.where((x) => x['id'] == k0['id']).firstOrNull ?? k0;
         k['ovDay'] = today;
         await D.save();
         final choice = await showDialog<String>(
@@ -7662,6 +8043,21 @@ class _H extends State<Home> with WidgetsBindingObserver {
     }
   }
 
+  Widget _gameBtn(IconData ic, String name, String key, Widget Function() page) {
+    final p = prefs.getInt('$key:${ds(DateTime.now())}') ?? 0;
+    return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: OutlinedButton.icon(
+            icon: Icon(ic),
+            label: Text(p >= 2 ? '$name: سهم امروز تموم شد 🌙' : '$name (${2 - p} بار مونده امروز)'),
+            onPressed: p >= 2
+                ? null
+                : () async {
+                    await Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => page()));
+                    if (mounted) setState(() {});
+                  }));
+  }
+
   void _noCoins(int price) {
     sfx('delete');
     toast('سکه‌ی کافی نداری 🪙 ${price - Gm.coins} سکه‌ی دیگه لازمه؛ با کار، عادت و تمرکز سکه جمع کن');
@@ -7733,6 +8129,8 @@ class _H extends State<Home> with WidgetsBindingObserver {
                         await Navigator.of(context).push(MaterialPageRoute(fullscreenDialog: true, builder: (_) => const MemoryGame()));
                         if (mounted) setState(() {});
                       })));
+        kids.add(_gameBtn(Icons.directions_run, 'بازی پرش', 'jp', () => JumpGame(hero: h)));
+        kids.add(_gameBtn(Icons.touch_app, 'بازی ضربه‌ی سریع', 'wh', () => const WhackGame()));
         kids.add(Padding(padding: const EdgeInsets.only(top: 6), child: OutlinedButton.icon(icon: const Icon(Icons.collections_bookmark_outlined), label: Text('آلبوم پت‌ها (${Gm.album.length} از ${gAnimals.length * 3})'), onPressed: albumSheet)));
       }
       kids.add(Card(
